@@ -5,7 +5,7 @@
 // Never overwrites and never deletes. Every batch is logged in .margin/moves.jsonl.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, marginDir, readJson, appendLine, rel, isInside } from './lib.mjs';
+import { projectDir, marginDir, readJson, readJsonl, writeJsonlAtomic, damagedLinesNote, appendLine, rel, isInside } from './lib.mjs';
 
 const root = projectDir();
 const logFile = path.join(marginDir(root), 'moves.jsonl');
@@ -23,8 +23,12 @@ function moveOne(from, to) {
 }
 
 if (command === 'apply') {
-  const plan = readJson(path.resolve(root, planFile || ''), null);
-  if (!Array.isArray(plan)) { console.log('Plan file missing or not a JSON list.'); process.exit(1); }
+  const read = readJson(path.resolve(root, planFile || ''));
+  if (read.state !== 'ok' || !Array.isArray(read.value)) {
+    console.log(read.state === 'missing' ? 'Plan file not found.' : read.state === 'damaged' ? `The plan file is ${read.problem}.` : 'The plan file must be a JSON list of moves.');
+    process.exit(1);
+  }
+  const plan = read.value;
   const done = [];
   for (const step of plan) {
     const problem = moveOne(step.from, step.to);
@@ -34,16 +38,19 @@ if (command === 'apply') {
   if (done.length) appendLine(logFile, { time: new Date().toISOString(), moves: done });
   console.log(`${done.length} of ${plan.length} moved. Undo with: node move.mjs undo`);
 } else if (command === 'undo') {
-  const lines = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean) : [];
-  if (!lines.length) { console.log('Nothing to undo.'); process.exit(0); }
-  const last = JSON.parse(lines.pop());
+  const log = readJsonl(logFile);
+  const note = damagedLinesNote(log.bad, 'moves.jsonl');
+  const lastIndex = log.lines.map((l) => Boolean(l.value && Array.isArray(l.value.moves))).lastIndexOf(true);
+  if (lastIndex < 0) { console.log('Nothing to undo.'); if (note) console.log(note); process.exit(0); }
+  const last = log.lines[lastIndex].value;
   let restored = 0;
   for (const step of [...last.moves].reverse()) {
     const problem = moveOne(step.to, step.from);
     if (problem) console.log(problem); else restored++;
   }
-  fs.writeFileSync(logFile, lines.length ? lines.join('\n') + '\n' : '');
+  writeJsonlAtomic(logFile, log.lines.filter((_, i) => i !== lastIndex));
   console.log(`Put back ${restored} of ${last.moves.length} files from ${last.time}.`);
+  if (note) console.log(note);
 } else {
   console.log('Use "apply <plan.json>" or "undo".');
   process.exit(1);

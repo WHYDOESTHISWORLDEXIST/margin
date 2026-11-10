@@ -4,14 +4,157 @@ import path from 'node:path';
 
 export const IS_WINDOWS = process.platform === 'win32';
 
+// ---------------------------------------------------------------------------
+// Reading and writing Margin's own files.
+//
+// Margin's files must never be half-written, and a damaged one must never be
+// silently replaced: readers say whether a file is missing or damaged, writers
+// write a temp file and rename it into place.
+// ---------------------------------------------------------------------------
+
+export function stripBom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 export function readStdinJson() {
   try {
-    const raw = fs.readFileSync(0, 'utf8');
+    const raw = stripBom(fs.readFileSync(0, 'utf8'));
     return raw.trim() ? JSON.parse(raw) : {};
   } catch {
     return {};
   }
 }
+
+// { state: 'ok', value } | { state: 'missing' } | { state: 'damaged', problem }
+export function readJson(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return { state: 'missing' };
+    return { state: 'damaged', problem: `can't be read (${err.code || err.message})` };
+  }
+  try {
+    return { state: 'ok', value: JSON.parse(stripBom(raw)) };
+  } catch {
+    return { state: 'damaged', problem: raw.trim() ? 'not valid JSON' : 'empty' };
+  }
+}
+
+export function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Rename, retrying once: on Windows a reader (an editor, a virus scanner) can
+// briefly hold the destination open.
+function renameWithRetry(from, to) {
+  try {
+    fs.renameSync(from, to);
+  } catch (err) {
+    if (!['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+    sleepSync(60);
+    fs.renameSync(from, to);
+  }
+}
+
+export function writeFileAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text);
+  try {
+    renameWithRetry(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+export function writeJsonAtomic(file, value) {
+  writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
+}
+export const writeJson = writeJsonAtomic;
+
+// One JSON object per line. Damaged lines are kept (as raw text) so a rewrite
+// never loses them and line positions stay stable.
+// Returns { entries, bad, lines }: entries are the parsed objects, bad the
+// 1-based positions of damaged lines, lines every non-empty line in order as
+// { n, value } or { n, raw }.
+export function readJsonl(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return { entries: [], bad: [], lines: [] };
+    throw err;
+  }
+  const lines = [];
+  for (const text of stripBom(raw).split('\n')) {
+    if (!text.trim()) continue;
+    const n = lines.length + 1;
+    try {
+      const value = JSON.parse(text);
+      lines.push(isPlainObject(value) ? { n, value } : { n, raw: text.replace(/\r$/, '') });
+    } catch {
+      lines.push({ n, raw: text.replace(/\r$/, '') });
+    }
+  }
+  return {
+    entries: lines.filter((l) => l.value).map((l) => l.value),
+    bad: lines.filter((l) => !l.value).map((l) => l.n),
+    lines
+  };
+}
+
+export function writeJsonlAtomic(file, lines) {
+  const text = lines.map((l) => (l.value ? JSON.stringify(l.value) : l.raw)).join('\n');
+  writeFileAtomic(file, text ? text + '\n' : '');
+}
+
+export function damagedLinesNote(bad, name) {
+  if (!bad.length) return '';
+  return `Note: ${bad.length} damaged line${bad.length === 1 ? '' : 's'} in .margin/${name} ${bad.length === 1 ? 'was' : 'were'} skipped (line ${bad.join(', ')}).`;
+}
+
+// Append one JSON line, first ending a cut-off last line so the new entry
+// isn't glued onto it.
+export function appendLine(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let prefix = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (size > 0) {
+        const last = Buffer.alloc(1);
+        fs.readSync(fd, last, 0, 1, size - 1);
+        if (last[0] !== 0x0a) prefix = '\n';
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // No file yet.
+  }
+  fs.appendFileSync(file, prefix + JSON.stringify(value) + '\n');
+}
+
+// A filesystem-safe timestamp, e.g. 2026-11-10T16-11-16-421Z.
+export function stamp(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+// Move a damaged file out of the way, keeping it. Returns the new name.
+export function keepAside(file) {
+  const dest = `${file}.damaged-${stamp()}`;
+  renameWithRetry(file, dest);
+  return dest;
+}
+
+export const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// ---------------------------------------------------------------------------
+// Project and settings.
+// ---------------------------------------------------------------------------
 
 export function projectDir(input = {}) {
   return path.resolve(process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd());
@@ -19,19 +162,6 @@ export function projectDir(input = {}) {
 
 export function marginDir(root) {
   return path.join(root, '.margin');
-}
-
-export function readJson(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-
-export function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 }
 
 export const DEFAULT_SETTINGS = {
@@ -43,18 +173,47 @@ export const DEFAULT_SETTINGS = {
   storyLength: 'short'
 };
 
+export const isSettingName = (key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key);
+
+// { state: 'missing' | 'ok' | 'damaged', settings, problems, extra }
+// settings always holds every known key with a value of the right type; a
+// value of the wrong type is ignored (and named in problems). extra keeps keys
+// Margin doesn't know, so a rewrite doesn't drop them.
+export function readSettings(root) {
+  const file = path.join(marginDir(root), 'settings.json');
+  const r = readJson(file);
+  const settings = { ...DEFAULT_SETTINGS };
+  const problems = [];
+  const extra = {};
+  if (r.state === 'missing') return { state: 'missing', file, settings, problems, extra };
+  if (r.state === 'damaged' || !isPlainObject(r.value)) {
+    return { state: 'damaged', file, settings, problems: [r.problem || 'not a list of settings'], extra };
+  }
+  for (const [key, value] of Object.entries(r.value)) {
+    if (!isSettingName(key)) extra[key] = value;
+    else if (typeof value === typeof DEFAULT_SETTINGS[key]) settings[key] = value;
+    else problems.push(`ignored ${key}: ${JSON.stringify(value)} (expected ${typeof DEFAULT_SETTINGS[key] === 'boolean' ? 'yes or no' : 'text'})`);
+  }
+  return { state: 'ok', file, settings, problems, extra };
+}
+
 export function loadSettings(root) {
-  return { ...DEFAULT_SETTINGS, ...readJson(path.join(marginDir(root), 'settings.json'), {}) };
+  return readSettings(root).settings;
 }
 
 export function loadFocus(root) {
-  const focus = readJson(path.join(marginDir(root), 'focus.json'), {});
+  const r = readJson(path.join(marginDir(root), 'focus.json'));
+  const focus = r.state === 'ok' && isPlainObject(r.value) ? r.value : {};
   return { enabled: Boolean(focus.enabled), paths: Array.isArray(focus.paths) ? focus.paths : [] };
 }
 
 export function saveFocus(root, focus) {
-  writeJson(path.join(marginDir(root), 'focus.json'), focus);
+  writeJsonAtomic(path.join(marginDir(root), 'focus.json'), focus);
 }
+
+// ---------------------------------------------------------------------------
+// Paths.
+// ---------------------------------------------------------------------------
 
 function normalize(p) {
   const resolved = path.resolve(p);
@@ -72,9 +231,4 @@ export function isInside(target, base) {
 // Project-relative path with forward slashes, for display and storage.
 export function rel(root, target) {
   return path.relative(root, path.resolve(root, target)).split(path.sep).join('/') || '.';
-}
-
-export function appendLine(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(value) + '\n');
 }

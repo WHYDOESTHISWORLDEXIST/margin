@@ -20,8 +20,14 @@ function test(name, fn) {
 }
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// Throwaway projects live under the temp folder, with a space in the path, and
+// are removed when the run ends.
+const made = [];
+process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }); });
+
 function project() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'margin-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'margin test '));
+  made.push(dir);
   const files = {
     'drafts/ch3.md': 'The mills closed in 1871 [@smith2020].\nSee also \\cite{jones2019, smtih2020}.\n',
     'notes/interviews.md': 'Mr. Hale said the mills closed in 1874.\n',
@@ -167,6 +173,122 @@ test('settings can be set without editing files', () => {
   run('settings.mjs', ['set', 'suggestBreaks', 'no'], dir);
   const out = run('settings.mjs', ['show'], dir).out;
   assert(out.includes('bibliography: sources/library.bib') && out.includes('suggestBreaks: false'), 'settings should persist');
+});
+
+// --- Damaged or unusual .margin files (A-11/B-11/B-32) ---
+
+const marginPath = (dir, name) => path.join(dir, '.margin', name);
+function putMargin(dir, name, text) {
+  fs.mkdirSync(path.dirname(marginPath(dir, name)), { recursive: true });
+  fs.writeFileSync(marginPath(dir, name), text);
+}
+function claudeEdits(dir, rel, id, newText) {
+  const file = path.join(dir, rel);
+  hook(dir, 'Edit', { file_path: file }, id);
+  fs.writeFileSync(file, newText);
+  run('log-change.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: file }, tool_use_id: id });
+}
+const damagedCopies = (dir, name) => fs.readdirSync(path.join(dir, '.margin')).filter((f) => f.startsWith(`${name}.damaged-`));
+
+test('a damaged log line is skipped and the next change is still logged on its own line', () => {
+  const dir = project();
+  putMargin(dir, 'log.jsonl', '{"time":"2026-11-10T10:00:00.000Z","tool":"Edit","file":"drafts/ch3.md","created":false,"snapshot":null}\n{"time":"2026-11-10T10:01:00.000Z","tool":"Ed');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_after_damage', 'changed\n');
+  const lines = fs.readFileSync(marginPath(dir, 'log.jsonl'), 'utf8').trim().split('\n');
+  assert(lines.length === 3 && JSON.parse(lines[2]).tool === 'Edit', 'the new entry should be on a line of its own');
+  const list = run('review.mjs', ['list'], dir);
+  assert(list.code === 0, `review list should not crash: ${list.err}`);
+  assert(list.out.includes('damaged line') && list.out.includes('3\t'), 'list should show the new change as #3 and mention the damaged line');
+});
+
+test('undo still works past a damaged log line, and change numbers stay put', () => {
+  const dir = project();
+  putMargin(dir, 'log.jsonl', '{"time":"2026-11-10T10:01:00.000Z","tool":"Ed\n');
+  const file = path.join(dir, 'drafts/ch3.md');
+  const before = fs.readFileSync(file, 'utf8');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_past_damage', 'changed\n');
+  const undo = run('review.mjs', ['undo', '2'], dir);
+  assert(undo.code === 0 && fs.readFileSync(file, 'utf8') === before, `undo #2 should restore the file: ${undo.out}${undo.err}`);
+  assert(fs.readFileSync(marginPath(dir, 'log.jsonl'), 'utf8').startsWith('{"time":"2026-11-10T10:01:00.000Z","tool":"Ed\n'), 'the damaged line should be kept, not dropped');
+});
+
+test('undo explains a missing backup in one line', () => {
+  const dir = project();
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_missing_backup', 'changed\n');
+  for (const f of fs.readdirSync(path.join(dir, '.margin/history'))) if (f.endsWith('.md')) fs.rmSync(path.join(dir, '.margin/history', f));
+  const undo = run('review.mjs', ['undo', '1'], dir);
+  assert(undo.code === 1 && undo.err === '' && undo.out.trim().split('\n').length === 1 && undo.out.includes('no longer there'), `expected one plain line: ${undo.out}${undo.err}`);
+});
+
+test('organize undo skips a damaged record line', () => {
+  const dir = project();
+  putMargin(dir, 'plan.json', JSON.stringify([{ from: 'old copy.md', to: 'archive/old copy.md' }]));
+  run('move.mjs', ['apply', '.margin/plan.json'], dir);
+  fs.appendFileSync(marginPath(dir, 'moves.jsonl'), '{"time":"2026');
+  const undo = run('move.mjs', ['undo'], dir);
+  assert(undo.code === 0 && fs.existsSync(path.join(dir, 'old copy.md')), `undo should put the file back: ${undo.out}${undo.err}`);
+  assert(undo.out.includes('damaged line'), 'undo should mention the damaged line');
+});
+
+test('a damaged notes file is kept aside, not overwritten', () => {
+  const dir = project();
+  const damaged = '{"version":1,"items":[{"id":"a1","file":"drafts/ch3.md","line":1,"kind":"todo","message":"one","status":"open"},{"id":"a2"';
+  putMargin(dir, 'suggestions.json', damaged);
+  const list = run('suggestions.mjs', ['list'], dir);
+  assert(list.code === 0 && list.out.includes('damaged') && fs.readFileSync(marginPath(dir, 'suggestions.json'), 'utf8') === damaged, 'list should report the damage and change nothing');
+  const add = run('suggestions.mjs', ['add', JSON.stringify({ file: 'drafts/ch3.md', line: 2, message: 'new note' })], dir);
+  const kept = damagedCopies(dir, 'suggestions.json');
+  assert(kept.length === 1 && fs.readFileSync(marginPath(dir, kept[0]), 'utf8') === damaged, 'the damaged file should be kept as it was');
+  assert(add.out.includes(kept[0]), 'add should say where the damaged file went');
+  assert(JSON.parse(fs.readFileSync(marginPath(dir, 'suggestions.json'), 'utf8')).items.length === 1, 'the new list should hold the new note');
+});
+
+test('notes files of the wrong shape are treated as damaged, not crashed on', () => {
+  for (const text of ['{}', '{"items":null}', '[]']) {
+    const dir = project();
+    putMargin(dir, 'suggestions.json', text);
+    const add = run('suggestions.mjs', ['add', JSON.stringify({ file: 'drafts/ch3.md', message: 'x' })], dir);
+    assert(add.code === 0 && add.err === '' && damagedCopies(dir, 'suggestions.json').length === 1, `${text}: expected the file kept aside, got ${add.out}${add.err}`);
+  }
+});
+
+test('a damaged settings file is reported, and kept aside when a setting is saved', () => {
+  const dir = project();
+  const damaged = '{"drafts":"chapters","bibliography":"refs/zotero.bib"';
+  putMargin(dir, 'settings.json', damaged);
+  const show = run('settings.mjs', ['show'], dir);
+  assert(show.out.includes('damaged') && show.out.includes('drafts: drafts'), 'show should say the file is damaged and show defaults');
+  const set = run('settings.mjs', ['set', 'storyLength', 'long'], dir);
+  const kept = damagedCopies(dir, 'settings.json');
+  assert(kept.length === 1 && fs.readFileSync(marginPath(dir, kept[0]), 'utf8') === damaged, 'the damaged settings should be kept');
+  assert(set.out.includes(kept[0]) && run('settings.mjs', ['show'], dir).out.includes('storyLength: long'), 'set should report and save');
+});
+
+test('settings of the wrong type are ignored instead of crashing other commands', () => {
+  const dir = project();
+  putMargin(dir, 'settings.json', JSON.stringify({ bibliography: 7, suggestBreaks: 'maybe', drafts: 'chapters', custom: 'kept' }));
+  const show = run('settings.mjs', ['show'], dir);
+  assert(show.out.includes('drafts: chapters') && show.out.includes('ignored bibliography') && show.out.includes('ignored suggestBreaks'), `show should name the ignored values: ${show.out}`);
+  const cite = run('cite-check.mjs', ['drafts/ch3.md'], dir);
+  assert(cite.code === 0 && JSON.parse(cite.out).library === 'sources/library.bib', `cite-check should still find the library: ${cite.err}`);
+  run('settings.mjs', ['set', 'notes', 'research'], dir);
+  const saved = JSON.parse(fs.readFileSync(marginPath(dir, 'settings.json'), 'utf8'));
+  assert(saved.custom === 'kept' && saved.drafts === 'chapters' && saved.notes === 'research', 'unknown keys and valid values should survive a save');
+});
+
+test('JSON files that start with a byte-order mark are read normally', () => {
+  const dir = project();
+  putMargin(dir, 'settings.json', '﻿' + JSON.stringify({ drafts: 'chapters' }));
+  putMargin(dir, 'suggestions.json', '﻿' + JSON.stringify({ version: 1, items: [{ id: 'b0', file: 'drafts/ch3.md', line: 1, kind: 'todo', message: 'bom note', status: 'open' }] }));
+  assert(run('settings.mjs', ['show'], dir).out.includes('drafts: chapters'), 'settings with a BOM should be read');
+  assert(run('suggestions.mjs', ['list'], dir).out.includes('bom note'), 'notes with a BOM should be read');
+});
+
+test('Margin rewrites its files without leaving temp files behind', () => {
+  const dir = project();
+  run('suggestions.mjs', ['add', JSON.stringify({ file: 'drafts/ch3.md', message: 'x' })], dir);
+  run('settings.mjs', ['set', 'notes', 'research'], dir);
+  assert(!fs.readdirSync(path.join(dir, '.margin')).some((f) => f.endsWith('.tmp')), 'no .tmp files should remain');
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {

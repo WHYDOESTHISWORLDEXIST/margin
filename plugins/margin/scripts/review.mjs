@@ -5,32 +5,43 @@
 // Undo never deletes: a file Claude created is moved to .margin/trash instead.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, marginDir, appendLine } from './lib.mjs';
+import { projectDir, marginDir, appendLine, readJsonl, writeJsonlAtomic, damagedLinesNote } from './lib.mjs';
 
 const root = projectDir();
 const logFile = path.join(marginDir(root), 'log.jsonl');
-const entries = fs.existsSync(logFile)
-  ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
-  : [];
+const log = readJsonl(logFile);
+// A change's number is its line in the log, damaged lines included, so numbers
+// never shift when a line can't be read.
+const changes = log.lines.filter((l) => l.value).map((l) => ({ n: l.n, e: l.value }));
+const damagedNote = damagedLinesNote(log.bad, 'log.jsonl');
 const [command = 'list', arg] = process.argv.slice(2);
 
 if (command === 'list') {
   const count = Number(arg) || 20;
-  if (!entries.length) { console.log('Claude has not changed any files yet.'); process.exit(0); }
+  if (!changes.length) {
+    console.log('Claude has not changed any files yet.');
+    if (damagedNote) console.log(damagedNote);
+    process.exit(0);
+  }
   console.log('#\twhen\t\t\tchange\tfile\tcan undo');
-  entries.map((e, i) => ({ ...e, n: i + 1 })).reverse().slice(0, count).forEach((e) => {
+  [...changes].reverse().slice(0, count).forEach(({ n, e }) => {
     const what = e.undone ? 'undone' : e.created ? 'created' : 'edited';
     const undo = e.undone ? 'no' : e.snapshot || e.created ? 'yes' : 'no backup';
-    console.log(`${e.n}\t${e.time.slice(0, 16).replace('T', ' ')}\t${what}\t${e.file}\t${undo}`);
+    const when = typeof e.time === 'string' ? e.time.slice(0, 16).replace('T', ' ') : '?';
+    console.log(`${n}\t${when}\t${what}\t${e.file}\t${undo}`);
   });
+  if (damagedNote) console.log(damagedNote);
 } else if (command === 'undo') {
   const n = Number(arg);
-  const entry = entries[n - 1];
-  if (!entry) { console.log(`No change #${arg}.`); process.exit(1); }
+  const found = changes.find((c) => c.n === n);
+  if (!found) { console.log(`No change #${arg}.`); process.exit(1); }
+  const entry = found.e;
   if (entry.undone) { console.log(`Change #${n} was already undone.`); process.exit(0); }
   const target = path.resolve(root, entry.file);
   if (entry.snapshot) {
-    fs.copyFileSync(path.resolve(root, entry.snapshot), target);
+    const snapshot = path.resolve(root, entry.snapshot);
+    if (!fs.existsSync(snapshot)) { console.log(`The backup for change #${n} is no longer there, so it can't be undone here.`); process.exit(1); }
+    fs.copyFileSync(snapshot, target);
     console.log(`Restored ${entry.file} to how it was before change #${n}.`);
   } else if (entry.created) {
     const trash = path.join(marginDir(root), 'trash', `${Date.now()}__${path.basename(target)}`);
@@ -42,11 +53,12 @@ if (command === 'list') {
     process.exit(1);
   }
   entry.undone = true;
-  fs.writeFileSync(logFile, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  writeJsonlAtomic(logFile, log.lines);
   appendLine(path.join(marginDir(root), 'undo.jsonl'), { time: new Date().toISOString(), change: n, file: entry.file });
-  if (entries.slice(n).some((e) => e.file === entry.file && !e.undone)) {
+  if (changes.some((c) => c.n > n && c.e.file === entry.file && !c.e.undone)) {
     console.log('Note: later changes to the same file were rolled back too, because the file now matches the earlier backup.');
   }
+  if (damagedNote) console.log(damagedNote);
 } else {
   console.log('Use "list" or "undo <number>".');
   process.exit(1);
