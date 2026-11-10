@@ -1,0 +1,16 @@
+{
+  "name": "margin-tools",
+  "description": "Quiet writing helpers for Claude Code: file focus, tidy folders, citation and consistency checks, and break suggestions when you're stuck.",
+  "owner": {
+    "name": "Stefan Cutler"
+  },
+  "plugins": [
+    {
+      "name": "margin",
+      "source": "./plugins/margin",
+      "description": "Writing helpers that stay out of the way: pick which files Claude may read, organize your folders, check citations and contradictions, and take a break when you're stuck.",
+      "category": "writing",
+      "tags": ["writing", "citations", "focus", "notes"]
+    }
+  ]
+}

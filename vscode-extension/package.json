@@ -1,0 +1,50 @@
+{
+  "name": "margin-companion",
+  "displayName": "Margin Companion",
+  "description": "Shows Margin's notes in the editor margin only at natural pauses, and offers a quiet break when you've been stuck a while. Never pops up.",
+  "version": "0.1.0",
+  "publisher": "margin-tools",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "margin.breakMenu", "title": "Margin: Take a break" },
+      { "command": "margin.quiet", "title": "Margin: Something quiet" },
+      { "command": "margin.notes", "title": "Margin: Show margin notes" },
+      { "command": "margin.showNow", "title": "Margin: Show held notes now" }
+    ],
+    "configuration": {
+      "title": "Margin",
+      "properties": {
+        "margin.pauseSeconds": {
+          "type": "number",
+          "default": 8,
+          "minimum": 2,
+          "description": "Seconds without typing that count as a natural pause. Held notes appear at a pause."
+        },
+        "margin.stuckMinutes": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "Minutes of little progress (long idle, or mostly deleting) before the status bar quietly offers a break."
+        },
+        "margin.suggestBreaks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Quietly offer a break in the status bar when you seem to have stalled. It never pops up."
+        },
+        "margin.fileTypes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["markdown", "plaintext", "latex"],
+          "description": "Language ids Margin watches."
+        }
+      }
+    }
+  }
+}

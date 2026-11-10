@@ -1,0 +1,79 @@
+// PreToolUse hook.
+// 1. Focus guard: while focus is on, Read and Grep only reach the files and
+//    folders the writer picked with /margin:focus.
+// 2. Safety net: before Claude writes or edits a file, save a copy so
+//    /margin:review can show and undo the change.
+import fs from 'node:fs';
+import path from 'node:path';
+import { readStdinJson, projectDir, marginDir, loadFocus, isInside, rel, writeJson } from './lib.mjs';
+
+const input = readStdinJson();
+const root = projectDir(input);
+const tool = input.tool_name || '';
+const args = input.tool_input || {};
+
+function deny(reason) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason
+    }
+  }));
+  process.exit(0);
+}
+
+function alwaysAllowed(target) {
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  return isInside(target, marginDir(root)) || (pluginRoot && isInside(target, pluginRoot));
+}
+
+function focusCheck(target, focus) {
+  if (alwaysAllowed(target)) return;
+  const ok = focus.paths.some((p) => isInside(target, path.resolve(root, p)));
+  if (!ok) {
+    const list = focus.paths.length ? focus.paths.join(', ') : '(nothing picked yet)';
+    deny(
+      `Margin focus is on, and ${rel(root, target)} isn't in it. ` +
+      `Claude can read only: ${list}. ` +
+      `Ask the writer before going further. They can widen it with "/margin:focus add ${rel(root, target)}" or turn it off with "/margin:focus off".`
+    );
+  }
+}
+
+const focus = loadFocus(root);
+
+if (focus.enabled && tool === 'Read' && args.file_path) {
+  focusCheck(path.resolve(root, args.file_path), focus);
+}
+
+if (focus.enabled && tool === 'Grep') {
+  if (!args.path) {
+    deny(`Margin focus is on, so searching the whole project is blocked. Search inside one of: ${focus.paths.join(', ') || '(nothing picked yet)'}.`);
+  }
+  focusCheck(path.resolve(root, args.path), focus);
+}
+
+if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
+  const file = args.file_path || args.notebook_path;
+  if (file) {
+    const target = path.resolve(root, file);
+    if (!isInside(target, marginDir(root)) && input.tool_use_id) {
+      const historyDir = path.join(marginDir(root), 'history');
+      let snapshot = null;
+      if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        snapshot = path.join(historyDir, `${stamp}__${rel(root, target).replace(/\//g, '__')}`);
+        fs.mkdirSync(historyDir, { recursive: true });
+        fs.copyFileSync(target, snapshot);
+      }
+      writeJson(path.join(historyDir, 'pending', `${input.tool_use_id}.json`), {
+        file: rel(root, target),
+        snapshot: snapshot ? rel(root, snapshot) : null,
+        existed: Boolean(snapshot)
+      });
+    }
+  }
+}
+
+process.exit(0);

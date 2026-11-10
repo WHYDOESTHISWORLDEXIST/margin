@@ -1,0 +1,11 @@
+{
+  "name": "margin",
+  "displayName": "Margin",
+  "version": "0.1.0",
+  "description": "Writing helpers that stay out of the way: pick which files Claude may read, organize your folders, check citations and contradictions, and take a break when you're stuck.",
+  "author": {
+    "name": "Stefan Cutler"
+  },
+  "license": "MIT",
+  "keywords": ["writing", "citations", "zotero", "focus", "notes", "flow"]
+}
