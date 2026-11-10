@@ -9,17 +9,17 @@ allowed-tools: Bash(node *)
 
 The writer typed: `$ARGUMENTS`
 
-If they typed `undo`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" undo`, report the result and stop.
+If they typed `undo`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" --project "${CLAUDE_PROJECT_DIR}" undo`, report the result and stop.
 
 ## 1. Look
 
 Run the inventory. It lists files by kind, date and size, plus identical copies, without opening them:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/inventory.mjs" $ARGUMENTS`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/inventory.mjs" --project "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
 
 Read the settings for the folder names the writer already chose:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" show`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`
 
 ## 2. Propose
 
@@ -44,6 +44,6 @@ Then ask for approval with the AskUserQuestion tool: "Move all", "Let me pick" o
 
 Write the approved moves to `.margin/plan.json` as a JSON list of `{"from": "...", "to": "..."}` with project-relative paths, then run:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" apply .margin/plan.json`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" --project "${CLAUDE_PROJECT_DIR}" apply .margin/plan.json`
 
 The script refuses to overwrite anything and logs every batch. Report what moved, and tell the writer that `/margin:organize undo` puts the last batch back.

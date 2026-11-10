@@ -7,7 +7,7 @@ allowed-tools: Bash(node *), Read, Grep, Glob
 
 # Check a draft
 
-Draft to check: `$ARGUMENTS` (if empty, use the most recently changed file in the drafts folder from `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" show`, and say which one you picked).
+Draft to check: `$ARGUMENTS` (if empty, use the most recently changed file in the drafts folder from `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`, and say which one you picked).
 
 You are a careful second reader, not an editor. **Never change the draft.** Every finding becomes a margin note that the writer can act on or dismiss.
 
@@ -15,7 +15,7 @@ You are a careful second reader, not an editor. **Never change the draft.** Ever
 
 - Read the draft.
 - Read the writer's earlier notes from the notes folder. If focus is on, use only what focus allows; don't try to get around the guard.
-- Run the citation check: `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" <draft>`
+- Run the citation check: `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" <draft>`
 
 ## 2. Look for
 
@@ -32,7 +32,7 @@ Be conservative. A false alarm costs the writer more than a missed one, so only 
 
 Queue every finding at once, with the draft's line number:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" add '[{"file":"drafts/ch3.md","line":12,"kind":"contradiction","message":"Says 1871 here; notes/interviews.md:40 says 1874.","source":"notes/interviews.md:40"}]'`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add '[{"file":"drafts/ch3.md","line":12,"kind":"contradiction","message":"Says 1871 here; notes/interviews.md:40 says 1874.","source":"notes/interviews.md:40"}]'`
 
 Keep each message under about 25 words and factual. No praise, no "consider rewriting".
 

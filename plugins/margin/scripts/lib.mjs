@@ -1,5 +1,6 @@
 // Shared helpers for Margin's hook and command scripts. No dependencies.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const IS_WINDOWS = process.platform === 'win32';
@@ -156,8 +157,64 @@ export const isPlainObject = (v) => v !== null && typeof v === 'object' && !Arra
 // Project and settings.
 // ---------------------------------------------------------------------------
 
+// Skills pass the project folder as `--project "${CLAUDE_PROJECT_DIR}"`, because
+// commands Claude runs through its shell don't get CLAUDE_PROJECT_DIR, and the
+// shell's folder can be a subfolder after a `cd`. scriptArgs() returns the
+// script's own arguments without that flag.
+let projectFlag;
+export function scriptArgs(argv = process.argv.slice(2)) {
+  const out = [];
+  projectFlag = null;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--project') projectFlag = argv[++i] ?? null;
+    else if (argv[i].startsWith('--project=')) projectFlag = argv[i].slice('--project='.length);
+    else out.push(argv[i]);
+  }
+  return out;
+}
+
+// A folder value nobody filled in ("", "${CLAUDE_PROJECT_DIR}", "$CLAUDE_PROJECT_DIR",
+// "%CLAUDE_PROJECT_DIR%", "$env:CLAUDE_PROJECT_DIR") counts as absent.
+function usableDir(value) {
+  if (typeof value !== 'string') return null;
+  const v = value.trim();
+  if (!v || /\$\{[^}]*\}|^\$\w|\$env:|^%[^%]+%$/i.test(v)) return null;
+  return path.resolve(v);
+}
+
+const samePath = (a, b) => (IS_WINDOWS ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+// The nearest folder at or above `start` passing `test`. It never climbs to the
+// home folder (or above it) from below, so a stray .margin there can't capture
+// every project.
+function findUp(start, test) {
+  const home = path.resolve(os.homedir());
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if (dir !== start && samePath(dir, home)) return null;
+    if (test(dir)) return dir;
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+export const hasMarginMarker = (dir) =>
+  fs.existsSync(path.join(dir, '.margin', 'settings.json')) || fs.existsSync(path.join(dir, '.margin', 'focus.json'));
+
+// The project folder, in this order:
+// 1. CLAUDE_PROJECT_DIR (hooks get it), else --project (skills pass it), else the
+//    hook's cwd or the current folder; from there,
+// 2. the nearest folder at or above it that already has Margin set up
+//    (.margin/settings.json or .margin/focus.json), so a second .margin is never
+//    made below one that exists;
+// 3. otherwise the folder from step 1 if it was given explicitly, else the nearest
+//    folder with .git, else the current folder.
 export function projectDir(input = {}) {
-  return path.resolve(process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd());
+  if (projectFlag === undefined) scriptArgs();
+  const explicit = usableDir(process.env.CLAUDE_PROJECT_DIR) || usableDir(projectFlag);
+  const start = explicit || usableDir(input.cwd) || path.resolve(process.cwd());
+  const marked = findUp(start, hasMarginMarker);
+  if (marked) return marked;
+  if (explicit) return explicit;
+  return findUp(start, (dir) => fs.existsSync(path.join(dir, '.git'))) || start;
 }
 
 export function marginDir(root) {

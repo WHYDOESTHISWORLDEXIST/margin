@@ -5,7 +5,7 @@
 // Undo never deletes: a file Claude created is moved to .margin/trash instead.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, marginDir, appendLine, readJsonl, writeJsonlAtomic, damagedLinesNote } from './lib.mjs';
+import { projectDir, scriptArgs, marginDir, appendLine, readJsonl, writeJsonlAtomic, damagedLinesNote } from './lib.mjs';
 
 const root = projectDir();
 const logFile = path.join(marginDir(root), 'log.jsonl');
@@ -14,7 +14,7 @@ const log = readJsonl(logFile);
 // never shift when a line can't be read.
 const changes = log.lines.filter((l) => l.value).map((l) => ({ n: l.n, e: l.value }));
 const damagedNote = damagedLinesNote(log.bad, 'log.jsonl');
-const [command = 'list', arg] = process.argv.slice(2);
+const [command = 'list', arg] = scriptArgs();
 
 if (command === 'list') {
   const count = Number(arg) || 20;

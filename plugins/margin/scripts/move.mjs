@@ -5,11 +5,11 @@
 // Never overwrites and never deletes. Every batch is logged in .margin/moves.jsonl.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, marginDir, readJson, readJsonl, writeJsonlAtomic, damagedLinesNote, appendLine, rel, isInside } from './lib.mjs';
+import { projectDir, scriptArgs, marginDir, readJson, readJsonl, writeJsonlAtomic, damagedLinesNote, appendLine, rel, isInside } from './lib.mjs';
 
 const root = projectDir();
 const logFile = path.join(marginDir(root), 'moves.jsonl');
-const [command, planFile] = process.argv.slice(2);
+const [command, planFile] = scriptArgs();
 
 function moveOne(from, to) {
   const src = path.resolve(root, from);

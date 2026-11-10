@@ -2,10 +2,10 @@
 // Usage: node focus.mjs status | add <path...> | remove <path...> | on | off | clear
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, loadFocus, saveFocus, rel } from './lib.mjs';
+import { projectDir, scriptArgs, loadFocus, saveFocus, rel } from './lib.mjs';
 
 const root = projectDir();
-const [command = 'status', ...items] = process.argv.slice(2);
+const [command = 'status', ...items] = scriptArgs();
 const focus = loadFocus(root);
 const say = (line) => console.log(line);
 

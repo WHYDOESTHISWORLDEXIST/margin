@@ -291,6 +291,83 @@ test('Margin rewrites its files without leaving temp files behind', () => {
   assert(!fs.readdirSync(path.join(dir, '.margin')).some((f) => f.endsWith('.tmp')), 'no .tmp files should remain');
 });
 
+// --- Which folder is the project (A-03/B-07) ---
+
+// Runs a script the way Claude's shell tool does: CLAUDE_PROJECT_DIR isn't set.
+function shellRun(script, args, cwd) {
+  const env = { ...process.env, CLAUDE_PLUGIN_ROOT: path.join(scripts, '..') };
+  delete env.CLAUDE_PROJECT_DIR;
+  const res = spawnSync(process.execPath, [path.join(scripts, script), ...args], { cwd, env, encoding: 'utf8' });
+  return { out: res.stdout, err: res.stderr, code: res.status };
+}
+function hookWithProjectDir(projectDirValue, cwd, tool, toolInput, id = 'toolu_pd') {
+  const res = spawnSync(process.execPath, [path.join(scripts, 'guard.mjs')], {
+    cwd,
+    input: JSON.stringify({ cwd, tool_name: tool, tool_input: toolInput, tool_use_id: id, hook_event_name: 'PreToolUse' }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDirValue, CLAUDE_PLUGIN_ROOT: path.join(scripts, '..') },
+    encoding: 'utf8'
+  });
+  return { out: res.stdout, err: res.stderr, code: res.status };
+}
+const marginDirsIn = (dir) => {
+  const found = [];
+  (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) { if (e.name === '.margin') found.push(path.relative(dir, d) || '.'); else walk(path.join(d, e.name)); } })(dir);
+  return found;
+};
+
+test('skill scripts run from a subfolder use the project folder passed with --project', () => {
+  const dir = project();
+  const out = shellRun('focus.mjs', ['--project', dir, 'add', 'drafts/ch3.md'], path.join(dir, 'drafts'));
+  assert(out.out.includes('Focus is ON'), `focus add should work: ${out.out}${out.err}`);
+  assert(marginDirsIn(dir).join() === '.', `.margin should exist only at the project root, found: ${marginDirsIn(dir)}`);
+  assert(JSON.parse(hook(dir, 'Read', { file_path: path.join(dir, 'notes/private.md') }).out).hookSpecificOutput.permissionDecision === 'deny', 'the guard should enforce it');
+});
+
+test('without --project, scripts use the nearest .margin above the current folder', () => {
+  const dir = project();
+  run('settings.mjs', ['set', 'notes', 'research'], dir);
+  const show = shellRun('settings.mjs', ['show'], path.join(dir, 'drafts'));
+  assert(show.out.includes('notes: research') && marginDirsIn(dir).join() === '.', `expected the root settings: ${show.out}`);
+});
+
+test('a --project value that was never filled in is ignored', () => {
+  const dir = project();
+  run('settings.mjs', ['set', 'notes', 'research'], dir);
+  for (const unfilled of ['${CLAUDE_PROJECT_DIR}', '', '$CLAUDE_PROJECT_DIR', '%CLAUDE_PROJECT_DIR%']) {
+    const show = shellRun('settings.mjs', ['--project', unfilled, 'show'], path.join(dir, 'drafts'));
+    assert(show.out.includes('notes: research'), `--project "${unfilled}" should be ignored: ${show.out}${show.err}`);
+  }
+  assert(marginDirsIn(dir).join() === '.', 'no new .margin should appear');
+});
+
+test('hooks started in a subfolder use the .margin of the project above it', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const res = hookWithProjectDir(path.join(dir, 'drafts'), path.join(dir, 'drafts'), 'Read', { file_path: path.join(dir, 'notes/private.md') });
+  assert(JSON.parse(res.out).hookSpecificOutput.permissionDecision === 'deny', `the root focus list should apply: ${res.out}${res.err}`);
+  assert(marginDirsIn(dir).join() === '.', 'no .margin should appear in the subfolder');
+});
+
+test('with no .margin anywhere, a new one goes at the folder with .git, else the current folder', () => {
+  const withGit = project();
+  fs.mkdirSync(path.join(withGit, '.git'));
+  shellRun('focus.mjs', ['add', 'ch3.md'], path.join(withGit, 'drafts'));
+  assert(marginDirsIn(withGit).join() === '.', `expected .margin at the git root, found ${marginDirsIn(withGit)}`);
+  const plain = project();
+  shellRun('focus.mjs', ['add', 'ch3.md'], path.join(plain, 'drafts'));
+  assert(marginDirsIn(plain).join() === 'drafts', `expected .margin in the current folder, found ${marginDirsIn(plain)}`);
+});
+
+test('every skill command passes the project folder', () => {
+  const skills = path.join(scripts, '..', 'skills');
+  for (const name of fs.readdirSync(skills)) {
+    const text = fs.readFileSync(path.join(skills, name, 'SKILL.md'), 'utf8');
+    for (const m of text.matchAll(/node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/[\w-]+\.mjs"([^`\n]*)/g)) {
+      assert(m[1].startsWith(' --project "${CLAUDE_PROJECT_DIR}"'), `${name}/SKILL.md: ${m[0]}`);
+    }
+  }
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });

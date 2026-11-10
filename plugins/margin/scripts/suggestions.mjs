@@ -7,11 +7,11 @@
 //   node suggestions.mjs clear             removes dismissed notes
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { projectDir, marginDir, readJson, writeJsonAtomic, keepAside, isPlainObject, rel } from './lib.mjs';
+import { projectDir, scriptArgs, marginDir, readJson, writeJsonAtomic, keepAside, isPlainObject, rel } from './lib.mjs';
 
 const root = projectDir();
 const file = path.join(marginDir(root), 'suggestions.json');
-const [command = 'list', arg] = process.argv.slice(2);
+const [command = 'list', arg] = scriptArgs();
 const KINDS = ['citation', 'related', 'contradiction', 'todo', 'note'];
 
 // A damaged notes file is never silently replaced: adding a note keeps it aside

@@ -9,14 +9,14 @@ allowed-tools: Bash(node *)
 
 The writer typed: `$ARGUMENTS`
 
-- `undo <number>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" undo <number>` and report the result in one line.
-- `dismiss <id>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" dismiss <id>`.
-- `notes`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" list` and show the notes as a table.
+- `undo <number>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" undo <number>` and report the result in one line.
+- `dismiss <id>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" dismiss <id>`.
+- `notes`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" list` and show the notes as a table.
 
 With nothing typed, show both views:
 
-1. **Changes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" list`. Show them as a table with **#**, **When**, **Change**, **File** and **Can undo**.
-2. **Margin notes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" list`. Show them as a table with **Id**, **Kind**, **Where** and **Note**.
+1. **Changes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" list`. Show them as a table with **#**, **When**, **Change**, **File** and **Can undo**.
+2. **Margin notes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" list`. Show them as a table with **Id**, **Kind**, **Where** and **Note**.
 
 Then one line on how to act: "Undo with `/margin:review undo 3`, dismiss a note with `/margin:review dismiss a1b2c3`."
 

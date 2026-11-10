@@ -4,10 +4,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { projectDir, rel } from './lib.mjs';
+import { projectDir, scriptArgs, rel } from './lib.mjs';
 
 const root = projectDir();
-const start = path.resolve(root, process.argv[2] || '.');
+const start = path.resolve(root, scriptArgs()[0] || '.');
 const SKIP = new Set(['.git', 'node_modules', '.margin', '.obsidian', '.vscode', '.trash']);
 const KINDS = {
   draft: ['.md', '.markdown', '.txt', '.docx', '.doc', '.tex', '.rtf', '.odt', '.fountain'],

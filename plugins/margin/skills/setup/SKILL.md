@@ -10,7 +10,7 @@ allowed-tools: Bash(node *), Glob
 Help the writer set up Margin in a minute or two. They should never have to open or edit a config file. Settings live in `.margin/settings.json`, written by a script.
 
 1. Show the current settings:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" show`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`
 2. Look around quickly with Glob (top two folder levels only, plus any `*.bib` file) so you can suggest sensible answers instead of asking blank questions.
 3. Ask at most four questions in one go with the AskUserQuestion tool, each with your best guess as the first option:
    - Where do drafts live? (setting `drafts`)
@@ -18,7 +18,7 @@ Help the writer set up Margin in a minute or two. They should never have to open
    - Which bibliography file, if any? A Zotero "Better BibTeX" export works best. (setting `bibliography`)
    - Should Margin suggest breaks, like a short walk or story, when they seem stuck? (setting `suggestBreaks`)
 4. Save each answer:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" set <key> <value>`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" set <key> <value>`
 5. Finish with a short welcome that lists what they can do now, one line each:
    - `/margin:focus` to choose which files Claude may read
    - `/margin:organize` to tidy folders (nothing moves without their OK, and moves can be undone)

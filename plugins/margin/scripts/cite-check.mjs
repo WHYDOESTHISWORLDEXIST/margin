@@ -4,10 +4,10 @@
 // Usage: node cite-check.mjs <draft> [library.bib]
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, loadSettings, rel } from './lib.mjs';
+import { projectDir, scriptArgs, loadSettings, rel } from './lib.mjs';
 
 const root = projectDir();
-const [draftArg, bibArg] = process.argv.slice(2);
+const [draftArg, bibArg] = scriptArgs();
 if (!draftArg) { console.log('Usage: node cite-check.mjs <draft> [library.bib]'); process.exit(1); }
 
 function findBib() {

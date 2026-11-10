@@ -11,7 +11,7 @@ The writer typed: `$ARGUMENTS`
 
 1. Run the checker. The bibliography comes from the arguments, then from the `bibliography` setting, then from the first `.bib` file in the project:
 
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" $ARGUMENTS`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
 
 2. If no library was found, say so in one line and suggest exporting one from Zotero with Better BibTeX, then saving its path with `/margin:setup`. Stop there.
 
@@ -27,4 +27,4 @@ The writer typed: `$ARGUMENTS`
 
 For keys that aren't in the library at all, queue a margin note instead of guessing:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" add '{"file":"<draft>","line":<n>,"kind":"citation","message":"@<key> isn’t in your library."}'`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add '{"file":"<draft>","line":<n>,"kind":"citation","message":"@<key> isn’t in your library."}'`

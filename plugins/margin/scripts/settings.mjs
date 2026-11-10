@@ -1,9 +1,9 @@
 // Read and change Margin's per-project settings in .margin/settings.json.
 // Usage: node settings.mjs show | set <key> <value>
-import { projectDir, readSettings, writeJsonAtomic, keepAside, rel, isSettingName, DEFAULT_SETTINGS } from './lib.mjs';
+import { projectDir, scriptArgs, readSettings, writeJsonAtomic, keepAside, rel, isSettingName, DEFAULT_SETTINGS } from './lib.mjs';
 
 const root = projectDir();
-const [command = 'show', key, ...rest] = process.argv.slice(2);
+const [command = 'show', key, ...rest] = scriptArgs();
 const current = readSettings(root);
 const say = (line) => console.log(line);
 

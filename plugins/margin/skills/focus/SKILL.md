@@ -15,13 +15,13 @@ The writer typed: `$ARGUMENTS`
 
 Run it and show the result as is:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/focus.mjs" $ARGUMENTS`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/focus.mjs" --project "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
 
 Commands: `status`, `add <path...>`, `remove <path...>`, `on`, `off`, `clear`. Adding the first path turns focus on automatically.
 
 ## If they gave nothing, or described it in words
 
-1. Show the current state: `node "${CLAUDE_PLUGIN_ROOT}/scripts/focus.mjs" status`
+1. Show the current state: `node "${CLAUDE_PLUGIN_ROOT}/scripts/focus.mjs" --project "${CLAUDE_PROJECT_DIR}" status`
 2. If they described what they want ("just chapter 3 and my interview notes"), find the matching paths with Glob, then confirm the exact list in one short sentence before adding.
 3. If they said nothing, list the project's top-level folders and likely draft and notes files, then ask which to include with the AskUserQuestion tool (multiSelect). Offer "Turn focus off" as an option when it's on.
 4. Run the matching `add`, `remove`, `on` or `off` command.
