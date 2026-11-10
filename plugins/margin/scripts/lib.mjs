@@ -221,6 +221,14 @@ export function marginDir(root) {
   return path.join(root, '.margin');
 }
 
+// Margin is "set up" in a project once .margin/settings.json exists (written by
+// /margin:setup, or by `settings.mjs ensure` at the start of any Margin command
+// that changes something). Until then the hooks do nothing, except that a focus
+// list, once set, is always enforced.
+export const settingsPath = (root) => path.join(marginDir(root), 'settings.json');
+export const focusPath = (root) => path.join(marginDir(root), 'focus.json');
+export const isSetUp = (root) => fs.existsSync(settingsPath(root));
+
 export const DEFAULT_SETTINGS = {
   drafts: 'drafts',
   notes: 'notes',

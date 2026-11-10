@@ -9,6 +9,8 @@ allowed-tools: Bash(node *)
 
 The writer typed: `$ARGUMENTS`
 
+Before `undo` or `dismiss`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`. It prints nothing unless it had to set Margin up in this project.
+
 - `undo <number>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" undo <number>` and report the result in one line.
 - `dismiss <id>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" dismiss <id>`.
 - `notes`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" list` and show the notes as a table.

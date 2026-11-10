@@ -3,12 +3,18 @@
 //    folders the writer picked with /margin:focus.
 // 2. Safety net: before Claude writes or edits a file, save a copy so
 //    /margin:review can show and undo the change.
+// In a project where Margin isn't set up it does nothing and creates nothing,
+// but a focus list that has been set is always enforced.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, loadFocus, isInside, rel, writeJson } from './lib.mjs';
+import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, loadFocus, isInside, rel, writeJson } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
+const hasFocus = fs.existsSync(focusPath(root));
+const setUp = isSetUp(root);
+if (!hasFocus && !setUp) process.exit(0);
+
 const tool = input.tool_name || '';
 const args = input.tool_input || {};
 
@@ -41,20 +47,22 @@ function focusCheck(target, focus) {
   }
 }
 
-const focus = loadFocus(root);
+if (hasFocus) {
+  const focus = loadFocus(root);
 
-if (focus.enabled && tool === 'Read' && args.file_path) {
-  focusCheck(path.resolve(root, args.file_path), focus);
-}
-
-if (focus.enabled && tool === 'Grep') {
-  if (!args.path) {
-    deny(`Margin focus is on, so searching the whole project is blocked. Search inside one of: ${focus.paths.join(', ') || '(nothing picked yet)'}.`);
+  if (focus.enabled && tool === 'Read' && args.file_path) {
+    focusCheck(path.resolve(root, args.file_path), focus);
   }
-  focusCheck(path.resolve(root, args.path), focus);
+
+  if (focus.enabled && tool === 'Grep') {
+    if (!args.path) {
+      deny(`Margin focus is on, so searching the whole project is blocked. Search inside one of: ${focus.paths.join(', ') || '(nothing picked yet)'}.`);
+    }
+    focusCheck(path.resolve(root, args.path), focus);
+  }
 }
 
-if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
+if (setUp && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
   const file = args.file_path || args.notebook_path;
   if (file) {
     const target = path.resolve(root, file);

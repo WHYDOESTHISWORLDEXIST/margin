@@ -11,6 +11,8 @@ Draft to check: `$ARGUMENTS` (if empty, use the most recently changed file in th
 
 You are a careful second reader, not an editor. **Never change the draft.** Every finding becomes a margin note that the writer can act on or dismiss.
 
+Before anything else, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`. It prints nothing unless it had to set Margin up in this project.
+
 ## 1. Gather
 
 - Read the draft.

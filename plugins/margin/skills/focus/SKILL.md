@@ -11,6 +11,8 @@ While focus is on, a hook blocks Claude from reading or searching anything outsi
 
 The writer typed: `$ARGUMENTS`
 
+Before any command that changes focus (anything but `status`), run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`. It prints nothing unless it had to set Margin up in this project.
+
 ## If they gave a command
 
 Run it and show the result as is:

@@ -9,6 +9,8 @@ allowed-tools: Bash(node *)
 
 The writer typed: `$ARGUMENTS`
 
+Before moving anything (step 3, or `undo`), run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`. It prints nothing unless it had to set Margin up in this project.
+
 If they typed `undo`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" --project "${CLAUDE_PROJECT_DIR}" undo`, report the result and stop.
 
 ## 1. Look

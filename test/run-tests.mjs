@@ -56,6 +56,9 @@ function hook(dir, tool, toolInput, id = 'toolu_1', script = 'guard.mjs') {
   return run(script, [], dir, { cwd: dir, tool_name: tool, tool_input: toolInput, tool_use_id: id, hook_event_name: 'PreToolUse' });
 }
 
+// What /margin:setup (or any Margin command that changes something) does first.
+const setUp = (dir) => run('settings.mjs', ['ensure'], dir);
+
 test('focus off: reads are allowed', () => {
   const dir = project();
   assert(hook(dir, 'Read', { file_path: path.join(dir, 'notes/private.md') }).out === '', 'expected no output');
@@ -108,6 +111,7 @@ test('focus context is added to prompts only when focus is on', () => {
 
 test('edits are backed up, logged and can be undone', () => {
   const dir = project();
+  setUp(dir);
   const file = path.join(dir, 'drafts/ch3.md');
   const before = fs.readFileSync(file, 'utf8');
   hook(dir, 'Edit', { file_path: file }, 'toolu_edit');
@@ -121,6 +125,7 @@ test('edits are backed up, logged and can be undone', () => {
 
 test('a file Claude created is moved to trash on undo, not deleted', () => {
   const dir = project();
+  setUp(dir);
   const file = path.join(dir, 'drafts/new.md');
   hook(dir, 'Write', { file_path: file }, 'toolu_new');
   fs.writeFileSync(file, 'new\n');
@@ -193,6 +198,7 @@ const damagedCopies = (dir, name) => fs.readdirSync(path.join(dir, '.margin')).f
 test('a damaged log line is skipped and the next change is still logged on its own line', () => {
   const dir = project();
   putMargin(dir, 'log.jsonl', '{"time":"2026-11-10T10:00:00.000Z","tool":"Edit","file":"drafts/ch3.md","created":false,"snapshot":null}\n{"time":"2026-11-10T10:01:00.000Z","tool":"Ed');
+  setUp(dir);
   claudeEdits(dir, 'drafts/ch3.md', 'toolu_after_damage', 'changed\n');
   const lines = fs.readFileSync(marginPath(dir, 'log.jsonl'), 'utf8').trim().split('\n');
   assert(lines.length === 3 && JSON.parse(lines[2]).tool === 'Edit', 'the new entry should be on a line of its own');
@@ -204,6 +210,7 @@ test('a damaged log line is skipped and the next change is still logged on its o
 test('undo still works past a damaged log line, and change numbers stay put', () => {
   const dir = project();
   putMargin(dir, 'log.jsonl', '{"time":"2026-11-10T10:01:00.000Z","tool":"Ed\n');
+  setUp(dir);
   const file = path.join(dir, 'drafts/ch3.md');
   const before = fs.readFileSync(file, 'utf8');
   claudeEdits(dir, 'drafts/ch3.md', 'toolu_past_damage', 'changed\n');
@@ -214,6 +221,7 @@ test('undo still works past a damaged log line, and change numbers stay put', ()
 
 test('undo explains a missing backup in one line', () => {
   const dir = project();
+  setUp(dir);
   claudeEdits(dir, 'drafts/ch3.md', 'toolu_missing_backup', 'changed\n');
   for (const f of fs.readdirSync(path.join(dir, '.margin/history'))) if (f.endsWith('.md')) fs.rmSync(path.join(dir, '.margin/history', f));
   const undo = run('review.mjs', ['undo', '1'], dir);
@@ -366,6 +374,61 @@ test('every skill command passes the project folder', () => {
       assert(m[1].startsWith(' --project "${CLAUDE_PROJECT_DIR}"'), `${name}/SKILL.md: ${m[0]}`);
     }
   }
+});
+
+// --- Hooks stay out of projects where Margin isn't set up (A-05/B-01, K1) ---
+
+function runHookEvent(dir, script, payload) {
+  return run(script, [], dir, { cwd: dir, tool_use_id: 'toolu_k1', ...payload });
+}
+
+test('hooks do nothing and create nothing in a project where Margin isn\'t set up', () => {
+  const dir = project();
+  const file = path.join(dir, 'drafts/ch3.md');
+  const outs = [
+    runHookEvent(dir, 'guard.mjs', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: file } }),
+    runHookEvent(dir, 'guard.mjs', { hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'mill' } }),
+    runHookEvent(dir, 'guard.mjs', { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file } }),
+    runHookEvent(dir, 'log-change.mjs', { hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: file } }),
+    runHookEvent(dir, 'guard.mjs', { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(dir, 'new.md') }, tool_use_id: 'toolu_k1w' }),
+    runHookEvent(dir, 'focus-context.mjs', { hook_event_name: 'UserPromptSubmit', prompt: 'hello' })
+  ];
+  assert(outs.every((o) => o.out === '' && o.code === 0), `hooks should be silent: ${JSON.stringify(outs.map((o) => o.out + o.err))}`);
+  assert(!fs.existsSync(path.join(dir, '.margin')), '.margin should not be created');
+});
+
+test('a focus list is enforced even before /margin:setup, without starting backups', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  assert(!fs.existsSync(marginPath(dir, 'settings.json')), 'focus alone should not set Margin up');
+  assert(JSON.parse(hook(dir, 'Read', { file_path: path.join(dir, 'notes/private.md') }).out).hookSpecificOutput.permissionDecision === 'deny', 'focus should be enforced');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_focus_only', 'changed\n');
+  assert(!fs.existsSync(marginPath(dir, 'history')) && !fs.existsSync(marginPath(dir, 'log.jsonl')), 'no backup or log before setup');
+});
+
+test('edits are backed up once Margin is set up', () => {
+  const dir = project();
+  setUp(dir);
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_after_setup', 'changed\n');
+  assert(fs.readdirSync(marginPath(dir, 'history')).some((f) => f.endsWith('.md')) && fs.existsSync(marginPath(dir, 'log.jsonl')), 'backup and log expected');
+});
+
+test('settings ensure sets Margin up once and stays quiet afterwards; init keeps answers', () => {
+  const dir = project();
+  const first = run('settings.mjs', ['ensure'], dir);
+  assert(first.out.includes('set up in') && fs.existsSync(marginPath(dir, 'settings.json')), `first ensure should set up: ${first.out}`);
+  assert(run('settings.mjs', ['ensure'], dir).out === '', 'second ensure should print nothing');
+  run('settings.mjs', ['set', 'notes', 'research'], dir);
+  const init = run('settings.mjs', ['init'], dir);
+  assert(init.out.includes('set up in') && run('settings.mjs', ['show'], dir).out.includes('notes: research'), 'init should keep earlier answers and say where');
+});
+
+test('skills set Margin up before they change anything', () => {
+  const skills = path.join(scripts, '..', 'skills');
+  const read = (name) => fs.readFileSync(path.join(skills, name, 'SKILL.md'), 'utf8');
+  const ensure = 'settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure';
+  for (const name of ['check', 'cite', 'focus', 'organize', 'review']) assert(read(name).includes(ensure), `${name} should run settings ensure`);
+  assert(read('setup').includes('settings.mjs" --project "${CLAUDE_PROJECT_DIR}" init'), 'setup should run settings init');
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {

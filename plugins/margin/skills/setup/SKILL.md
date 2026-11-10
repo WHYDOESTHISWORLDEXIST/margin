@@ -9,7 +9,8 @@ allowed-tools: Bash(node *), Glob
 
 Help the writer set up Margin in a minute or two. They should never have to open or edit a config file. Settings live in `.margin/settings.json`, written by a script.
 
-1. Show the current settings:
+1. Set Margin up in this project (earlier answers are kept; until this runs, Margin's backups stay off here) and show the current settings:
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" init`
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`
 2. Look around quickly with Glob (top two folder levels only, plus any `*.bib` file) so you can suggest sensible answers instead of asking blank questions.
 3. Ask at most four questions in one go with the AskUserQuestion tool, each with your best guess as the first option:

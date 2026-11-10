@@ -1,9 +1,12 @@
 // UserPromptSubmit hook: when focus is on, tell Claude which files it may use,
 // so it doesn't waste a turn trying files the guard will block.
-import { readStdinJson, projectDir, loadFocus } from './lib.mjs';
+import fs from 'node:fs';
+import { readStdinJson, projectDir, focusPath, loadFocus } from './lib.mjs';
 
 const input = readStdinJson();
-const focus = loadFocus(projectDir(input));
+const root = projectDir(input);
+if (!fs.existsSync(focusPath(root))) process.exit(0);
+const focus = loadFocus(root);
 
 if (focus.enabled) {
   const list = focus.paths.length ? focus.paths.join(', ') : 'nothing yet';
