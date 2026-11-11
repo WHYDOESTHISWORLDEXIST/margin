@@ -187,11 +187,11 @@ function putMargin(dir, name, text) {
   fs.mkdirSync(path.dirname(marginPath(dir, name)), { recursive: true });
   fs.writeFileSync(marginPath(dir, name), text);
 }
-function claudeEdits(dir, rel, id, newText) {
+function claudeEdits(dir, rel, id, newText, env = {}) {
   const file = path.join(dir, rel);
   hook(dir, 'Edit', { file_path: file }, id);
   fs.writeFileSync(file, newText);
-  run('log-change.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: file }, tool_use_id: id });
+  run('log-change.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: file }, tool_use_id: id, hook_event_name: 'PostToolUse' }, env);
 }
 const damagedCopies = (dir, name) => fs.readdirSync(path.join(dir, '.margin')).filter((f) => f.startsWith(`${name}.damaged-`));
 
@@ -627,6 +627,67 @@ await logAtTheSameMoment(sameMoment, 8);
 test('changes logged at the same moment get different numbers', () => {
   const ids = readText(marginPath(sameMoment, 'log.jsonl')).trim().split('\n').map((l) => JSON.parse(l).id);
   assert(ids.length === 8 && new Set(ids).size === 8 && Math.max(...ids) === 8, `ids: ${ids}`);
+});
+
+// --- Backups are capped without hiding anything (A-12/B-13, K2) ---
+
+const backupFiles = (dir) => fs.readdirSync(marginPath(dir, 'history'), { withFileTypes: true }).filter((d) => d.isFile()).map((d) => d.name);
+const logEntries = (dir) => readText(marginPath(dir, 'log.jsonl')).trim().split('\n').map((l) => JSON.parse(l));
+
+test('over the cap, old backups are cleared but the earliest and newest of each file stay', () => {
+  const dir = project();
+  setUp(dir);
+  const text = (n) => `version ${n} `.repeat(100) + '\n';                // about 1 KB each
+  const tight = { MARGIN_TEST_HISTORY_CAP: String(3.5 * text(0).length), MARGIN_TEST_HISTORY_DAYS: '0', MARGIN_TEST_PRUNE_EVERY: '1' };
+  fs.writeFileSync(path.join(dir, 'drafts/ch3.md'), text(0));
+  for (let n = 1; n <= 6; n++) claudeEdits(dir, 'drafts/ch3.md', `toolu_cap${n}`, text(n), tight);
+  const entries = logEntries(dir);
+  const kept = entries.filter((e) => e.snapshot).map((e) => e.id);
+  assert(kept.join() === '1,5,6', `expected backups of #1 (earliest), #5 and #6 (newest) to stay, got ${kept}`);
+  assert(backupFiles(dir).length === 3, `history should hold 3 backups: ${backupFiles(dir)}`);
+  assert(entries.filter((e) => e.pruned).map((e) => e.id).join() === '2,3,4', 'cleared changes keep their line, marked pruned');
+  const list = run('review.mjs', ['list'], dir).out;
+  assert(/^2\t.*\tbackup cleared \d{4}-\d\d-\d\d$/m.test(list), `list should say the backup was cleared: ${list}`);
+  const undo = run('review.mjs', ['undo', '2', '--go-ahead'], dir);
+  assert(undo.code === 1 && undo.out.includes('was cleared on'), `undo should explain: ${undo.out}${undo.err}`);
+});
+
+test('backups younger than 30 days are never cleared, even over the cap', () => {
+  const dir = project();
+  setUp(dir);
+  const tiny = { MARGIN_TEST_HISTORY_CAP: '10', MARGIN_TEST_PRUNE_EVERY: '1' };
+  for (let n = 1; n <= 4; n++) claudeEdits(dir, 'drafts/ch3.md', `toolu_young${n}`, `young ${n}\n`, tiny);
+  assert(logEntries(dir).every((e) => e.snapshot && !e.pruned) && backupFiles(dir).length === 4, 'all recent backups should stay');
+});
+
+test('a failed or refused edit leaves no backup or pending record behind', () => {
+  for (const event of ['PostToolUseFailure', 'PermissionDenied']) {
+    const dir = project();
+    setUp(dir);
+    const file = path.join(dir, 'drafts/ch3.md');
+    hook(dir, 'Edit', { file_path: file }, 'toolu_failed');
+    assert(backupFiles(dir).length === 1 && fs.existsSync(marginPath(dir, 'history/pending/toolu_failed.json')), 'the guard should have made a backup');
+    run('log-change.mjs', [], dir, { cwd: dir, hook_event_name: event, tool_name: 'Edit', tool_input: { file_path: file }, tool_use_id: 'toolu_failed', error: 'old_string not found' });
+    assert(backupFiles(dir).length === 0 && !fs.existsSync(marginPath(dir, 'history/pending/toolu_failed.json')), `${event}: backup and pending record should be gone`);
+    assert(!fs.existsSync(marginPath(dir, 'log.jsonl')), `${event}: nothing should be logged`);
+  }
+  const hooks = JSON.parse(fs.readFileSync(path.join(scripts, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
+  for (const event of ['PostToolUseFailure', 'PermissionDenied']) {
+    assert(hooks[event] && hooks[event][0].matcher.includes('Edit') && hooks[event][0].hooks[0].command.includes('log-change.mjs'), `${event} should run log-change.mjs`);
+  }
+});
+
+test('a pending record older than a day is swept with its backup; newer ones stay', () => {
+  const dir = project();
+  setUp(dir);
+  hook(dir, 'Edit', { file_path: path.join(dir, 'drafts/ch3.md') }, 'toolu_declined');   // a prompt the writer declined: no event follows
+  hook(dir, 'Edit', { file_path: path.join(dir, 'notes/interviews.md') }, 'toolu_inflight'); // still waiting for an answer
+  const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  fs.utimesSync(marginPath(dir, 'history/pending/toolu_declined.json'), old, old);
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_next', 'changed\n', { MARGIN_TEST_PRUNE_EVERY: '1' });
+  const pending = fs.readdirSync(marginPath(dir, 'history/pending'));
+  assert(pending.join() === 'toolu_inflight.json', `only the recent pending record should remain: ${pending}`);
+  assert(backupFiles(dir).length === 2, `the declined edit's backup should be gone: ${backupFiles(dir)}`);
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {

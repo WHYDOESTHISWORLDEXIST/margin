@@ -351,9 +351,13 @@ export function rel(root, target) {
   return path.relative(root, path.resolve(root, target)).split(path.sep).join('/') || '.';
 }
 
-// Two project paths name the same file (case-insensitive where the OS is).
+// A key that is equal for two paths naming the same file (case-insensitive where the OS is).
+export function fileKey(root, p) {
+  return normalize(path.resolve(root, p));
+}
+
 export function sameFile(root, a, b) {
-  return normalize(path.resolve(root, a)) === normalize(path.resolve(root, b));
+  return fileKey(root, a) === fileKey(root, b);
 }
 
 // ---------------------------------------------------------------------------
@@ -467,3 +471,10 @@ export function localTime(iso) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+// The history is tidied after every this-many logged changes (see history.mjs).
+// MARGIN_TEST_PRUNE_EVERY exists for the tests only.
+export const TIDY_EVERY = Math.max(1, Number(process.env.MARGIN_TEST_PRUNE_EVERY) || 50);
+
+// Tool-use ids name pending files; anything that could leave the folder is refused.
+export const safeToolUseId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]+$/.test(id);
