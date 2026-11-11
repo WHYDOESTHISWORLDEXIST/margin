@@ -9,7 +9,7 @@
 // (never its edits) with a message saying how to repair it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, isInside, rel, writeJson, appendLine, newSnapshot } from './lib.mjs';
+import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, isInside, rel, writeJson, appendLine, newSnapshot, fileKey } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -32,9 +32,15 @@ function deny(reason) {
   process.exit(0);
 }
 
+// Margin's own files right inside .margin/ (settings, focus list, notes, logs) stay
+// readable. Not .margin/history/ or .margin/trash/: they hold copies of the
+// writer's files, including ones outside the focus list.
 function alwaysAllowed(target) {
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  return isInside(target, marginDir(root)) || (pluginRoot && isInside(target, pluginRoot));
+  if (pluginRoot && isInside(target, pluginRoot)) return true;
+  if (fileKey(root, path.dirname(target)) !== fileKey(root, marginDir(root))) return false;
+  if (['history', 'trash'].includes(path.basename(target).toLowerCase())) return false;
+  try { return !fs.statSync(target).isDirectory(); } catch { return true; }
 }
 
 function focusCheck(target, focus) {

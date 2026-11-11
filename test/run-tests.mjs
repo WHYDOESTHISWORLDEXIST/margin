@@ -747,6 +747,27 @@ test('organize undo keeps the moves it couldn\'t put back, and a second undo fin
   assert(run('move.mjs', ['undo'], dir).out.includes('Nothing to undo'), 'the log should be empty now');
 });
 
+// --- Focus covers Margin's own copies of the writer's files (A-08/B-23) ---
+
+test('focus on: backups and trashed files can\'t be read or searched; Margin\'s own files can', () => {
+  const dir = project();
+  setUp(dir);
+  claudeEdits(dir, 'notes/private.md', 'toolu_private', 'Not for Claude. Edited.\n');   // before focus was set
+  putMargin(dir, 'trash/1700000000000__secret.md', 'trashed text\n');
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const backup = backupFiles(dir)[0];
+  const denied = [
+    hook(dir, 'Read', { file_path: marginPath(dir, path.join('history', backup)) }),
+    hook(dir, 'Read', { file_path: marginPath(dir, 'trash/1700000000000__secret.md') }),
+    hook(dir, 'Grep', { pattern: 'Claude', path: path.join(dir, '.margin') }),
+    hook(dir, 'Grep', { pattern: 'Claude', path: marginPath(dir, 'history') })
+  ];
+  assert(denied.every((r) => decisionOf(r) === 'deny'), `copies of the writer's files should be covered: ${denied.map((r) => decisionOf(r))}`);
+  for (const own of ['focus.json', 'settings.json', 'log.jsonl']) {
+    assert(decisionOf(hook(dir, 'Read', { file_path: marginPath(dir, own) })) === 'allow', `${own} should stay readable`);
+  }
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });

@@ -7,7 +7,7 @@ allowed-tools: Bash(node *), Glob
 
 # Focus: pick which files Claude may read
 
-While focus is on, a hook blocks Claude from reading or searching anything outside the picked list. Margin's own `.margin/` folder is always readable.
+While focus is on, a hook blocks Claude from reading or searching anything outside the picked list. Margin's own settings and lists in `.margin/` stay readable; its backups (`.margin/history/`, `.margin/trash/`) don't, since they hold copies of the writer's files.
 
 The writer typed: `$ARGUMENTS`
 
