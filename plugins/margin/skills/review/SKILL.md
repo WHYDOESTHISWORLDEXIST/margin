@@ -12,6 +12,7 @@ The writer typed: `$ARGUMENTS`
 Before `undo` or `dismiss`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`. It prints nothing unless it had to set Margin up in this project.
 
 - `undo <number>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" undo <number>` and report the result in one line.
+  If it refuses (exit code 2: later changes touched the same file, or the file changed since Claude's change), show its explanation as it is, then ask once with the AskUserQuestion tool: "Undo anyway (the current version is kept)" or "Leave it as it is". Only if they choose to go ahead, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" undo <number> --go-ahead` and report the result in one line. Never add `--go-ahead` on your own.
 - `dismiss <id>`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" dismiss <id>`.
 - `notes`: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" list` and show the notes as a table.
 
@@ -22,4 +23,4 @@ With nothing typed, show both views:
 
 Then one line on how to act: "Undo with `/margin:review undo 3`, dismiss a note with `/margin:review dismiss a1b2c3`."
 
-Undo restores the backup taken just before that change. If later changes touched the same file, they're rolled back too, so say so before undoing in that case and ask first. Files Claude created are moved to `.margin/trash`, never deleted.
+Undo restores the backup taken before that change. It first keeps the current version and lists the undo as a change of its own, so an undo can be undone too. It won't silently roll back later changes to the same file or edits made since; it explains and waits for a go-ahead. Files Claude created are moved to `.margin/trash`, never deleted.

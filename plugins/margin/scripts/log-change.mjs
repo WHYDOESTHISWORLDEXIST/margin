@@ -1,9 +1,11 @@
 // PostToolUse hook: record every file Claude changed in .margin/log.jsonl,
 // with the backup made by guard.mjs, so /margin:review can show it.
+// Each entry gets a stable id and a fingerprint of the file just after the
+// change, so undo can tell whether anything changed it since.
 // Does nothing in a project where Margin isn't set up, and never creates .margin/.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, isSetUp, readJson, isPlainObject, appendLine, rel, isInside } from './lib.mjs';
+import { readStdinJson, projectDir, marginDir, isSetUp, readJson, isPlainObject, appendLine, rel, isInside, logPath, withLock, nextChangeId, fingerprint } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -18,12 +20,17 @@ if (file && !isInside(path.resolve(root, file), marginDir(root))) {
   const pending = read.state === 'ok' && isPlainObject(read.value) ? read.value : null;
   // A change in a set-up project is listed even if its backup failed.
   if (pending || isSetUp(root)) {
-    appendLine(path.join(marginDir(root), 'log.jsonl'), {
-      time: new Date().toISOString(),
-      tool: input.tool_name,
-      file: rel(root, file),
-      created: pending ? !pending.existed : null,
-      snapshot: pending ? pending.snapshot : null
+    const after = fingerprint(path.resolve(root, file));
+    withLock(root, 'log', () => {
+      appendLine(logPath(root), {
+        id: nextChangeId(root),
+        time: new Date().toISOString(),
+        tool: input.tool_name,
+        file: rel(root, file),
+        created: pending ? !pending.existed : null,
+        snapshot: pending ? pending.snapshot : null,
+        after
+      });
     });
   }
   if (pending) fs.rmSync(pendingFile, { force: true });

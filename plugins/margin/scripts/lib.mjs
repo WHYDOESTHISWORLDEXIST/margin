@@ -1,7 +1,12 @@
 // Shared helpers for Margin's hook and command scripts. No dependencies.
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+
+// node:crypto is only needed after an edit, so hooks that run on every read or
+// prompt don't pay for loading it.
+const requireBuiltin = createRequire(import.meta.url);
 
 export const IS_WINDOWS = process.platform === 'win32';
 
@@ -48,7 +53,7 @@ export function sleepSync(ms) {
 
 // Rename, retrying once: on Windows a reader (an editor, a virus scanner) can
 // briefly hold the destination open.
-function renameWithRetry(from, to) {
+export function renameWithRetry(from, to) {
   try {
     fs.renameSync(from, to);
   } catch (err) {
@@ -344,4 +349,121 @@ export function isInside(target, base) {
 // Project-relative path with forward slashes, for display and storage.
 export function rel(root, target) {
   return path.relative(root, path.resolve(root, target)).split(path.sep).join('/') || '.';
+}
+
+// Two project paths name the same file (case-insensitive where the OS is).
+export function sameFile(root, a, b) {
+  return normalize(path.resolve(root, a)) === normalize(path.resolve(root, b));
+}
+
+// ---------------------------------------------------------------------------
+// Changes, backups and the change log.
+// ---------------------------------------------------------------------------
+
+export const logPath = (root) => path.join(marginDir(root), 'log.jsonl');
+
+const HASH_LIMIT = 20 * 1024 * 1024;
+
+// What a file holds right now, cheaply comparable later: 'absent', a SHA-1 of the
+// content, or (above 20 MB) its size and modification time.
+export function fingerprint(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { return 'absent'; }
+  if (!st.isFile()) return 'absent';
+  if (st.size > HASH_LIMIT) return `size:${st.size}:mtime:${Math.round(st.mtimeMs)}`;
+  return 'sha1:' + requireBuiltin('node:crypto').createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+}
+
+// Copy a file into place without ever leaving a half-written file behind.
+export function copyFileAtomic(src, dest) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const tmp = `${dest}.${process.pid}.tmp`;
+  fs.copyFileSync(src, tmp);
+  try {
+    renameWithRetry(tmp, dest);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+// Where a new backup copy of a project file goes. Which file a backup belongs to
+// is recorded in the log and the pending records; never work it out from the name.
+export function newSnapshot(root, relFile) {
+  const dir = path.join(marginDir(root), 'history');
+  const base = `${stamp()}__${relFile.replace(/[\\/]/g, '__')}`;
+  let abs = path.join(dir, base);
+  for (let i = 2; fs.existsSync(abs); i++) abs = path.join(dir, `${base}-${i}`);
+  return { abs, rel: rel(root, abs) };
+}
+
+// Run fn while holding .margin/<name>.lock, so a hook appending to the change log
+// and /margin:review rewriting it can't lose each other's lines. Waits up to 3 s,
+// clears a lock left behind by a crash after 10 s, and never blocks for longer.
+export function withLock(root, name, fn) {
+  const lock = path.join(marginDir(root), `${name}.lock`);
+  const deadline = Date.now() + 3000;
+  let fd;
+  while (fd === undefined) {
+    try {
+      fd = fs.openSync(lock, 'wx');
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 10000) { fs.rmSync(lock, { force: true }); continue; }
+      } catch { continue; }
+      if (Date.now() > deadline) break;
+      sleepSync(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (fd !== undefined) { fs.closeSync(fd); fs.rmSync(lock, { force: true }); }
+  }
+}
+
+// Changes are numbered by a stable id. Older logs have no ids; their entries are
+// numbered by their line, which is what /margin:review always showed.
+export function readChanges(root) {
+  const log = readJsonl(logPath(root));
+  const changes = log.lines
+    .filter((l) => l.value)
+    .map((l) => ({ id: Number.isInteger(l.value.id) && l.value.id > 0 ? l.value.id : l.n, e: l.value }));
+  return { log, changes };
+}
+
+// The id for the next change: one more than the last line's id (read from the
+// end of the file, so it stays cheap as the log grows), or for an older log one
+// more than the number of lines.
+export function nextChangeId(root) {
+  const file = logPath(root);
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return 1; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (!size) return 1;
+    const len = Math.min(size, 65536);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const last = buf.toString('utf8').split('\n').filter((l) => l.trim()).pop();
+    try {
+      const value = JSON.parse(last);
+      if (Number.isInteger(value.id) && value.id > 0) return value.id + 1;
+    } catch { /* fall through to a full read */ }
+  } finally {
+    fs.closeSync(fd);
+  }
+  const { lines } = readJsonl(file);
+  let max = lines.length;
+  for (const l of lines) if (l.value && Number.isInteger(l.value.id) && l.value.id > max) max = l.value.id;
+  return max + 1;
+}
+
+// "2026-11-10 11:40" in the writer's own time zone.
+export function localTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '?';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }

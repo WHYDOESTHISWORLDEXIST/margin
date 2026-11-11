@@ -9,7 +9,7 @@
 // (never its edits) with a message saying how to repair it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, isInside, rel, writeJson, appendLine } from './lib.mjs';
+import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, isInside, rel, writeJson, appendLine, newSnapshot } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -86,14 +86,13 @@ function backUp() {
   const historyDir = path.join(marginDir(root), 'history');
   let snapshot = null;
   if (fs.existsSync(target) && fs.statSync(target).isFile()) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    snapshot = path.join(historyDir, `${stamp}__${rel(root, target).replace(/\//g, '__')}`);
+    snapshot = newSnapshot(root, rel(root, target));
     fs.mkdirSync(historyDir, { recursive: true });
-    fs.copyFileSync(target, snapshot);
+    fs.copyFileSync(target, snapshot.abs);
   }
   writeJson(path.join(historyDir, 'pending', `${input.tool_use_id}.json`), {
     file: rel(root, target),
-    snapshot: snapshot ? rel(root, snapshot) : null,
+    snapshot: snapshot ? snapshot.rel : null,
     existed: Boolean(snapshot)
   });
 }

@@ -1,6 +1,6 @@
 // Runs Margin's scripts against throwaway projects. No dependencies.
 // Usage: node test/run-tests.mjs
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -499,6 +499,134 @@ test('if the guard itself fails, reads are paused with a message and edits go ah
   const edit = run('guard.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: path.join(dir, 'drafts/ch3.md') }, tool_use_id: 'toolu_f2', hook_event_name: 'PreToolUse' }, fail);
   assert(edit.code === 0 && edit.out === '', 'an edit must not be blocked');
   assert(fs.readFileSync(marginPath(dir, 'errors.jsonl'), 'utf8').includes('simulated failure'), 'the failure should be recorded');
+});
+
+// --- Undo never destroys anything and asks before rolling back more (A-01+A-02/B-03, K3; A-25/B-24) ---
+
+const readText = (file) => fs.readFileSync(file, 'utf8');
+function threeClaudeEdits(dir) {
+  const file = path.join(dir, 'drafts/ch3.md');
+  fs.writeFileSync(file, 'v0\n');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_v1', 'v1\n');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_v2', 'v2\n');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_v3', 'v3\n');
+  return file;
+}
+const historyHolding = (dir, text) => fs.readdirSync(marginPath(dir, 'history')).some((f) => {
+  const p = marginPath(dir, path.join('history', f));
+  return fs.statSync(p).isFile() && readText(p).includes(text);
+});
+
+test('undo refuses when later changes touched the same file, and changes nothing', () => {
+  const dir = project();
+  setUp(dir);
+  const file = threeClaudeEdits(dir);
+  const res = run('review.mjs', ['undo', '1'], dir);
+  assert(res.code === 2 && res.out.includes('#2, #3') && res.out.includes('undo 1 --go-ahead') && res.out.includes('undo 3'), `expected a refusal: ${res.out}${res.err}`);
+  assert(readText(file) === 'v3\n', 'the file must not change');
+});
+
+test('undoing the latest change first, then the earlier ones, restores the original', () => {
+  const dir = project();
+  setUp(dir);
+  const file = threeClaudeEdits(dir);
+  for (const [n, expected] of [['3', 'v2\n'], ['2', 'v1\n'], ['1', 'v0\n']]) {
+    const res = run('review.mjs', ['undo', n], dir);
+    assert(res.code === 0 && readText(file) === expected, `undo ${n}: ${res.out}${res.err}`);
+  }
+});
+
+test('undo --go-ahead rolls later changes back too, and the list stays truthful', () => {
+  const dir = project();
+  setUp(dir);
+  const file = threeClaudeEdits(dir);
+  const res = run('review.mjs', ['undo', '1', '--go-ahead'], dir);
+  assert(res.code === 0 && readText(file) === 'v0\n' && res.out.includes('#2, #3'), `${res.out}${res.err}`);
+  const list = run('review.mjs', ['list'], dir).out;
+  assert(/^4\t.*\tundid #1, #2, #3\tdrafts\/ch3\.md\tyes$/m.test(list), `the undo should be listed: ${list}`);
+  for (const n of ['1', '2', '3']) assert(new RegExp(`^${n}\\t.*\\tundone\\t.*\\tno$`, 'm').test(list), `#${n} should show as undone: ${list}`);
+  assert(run('review.mjs', ['undo', '2'], dir).out.includes('already undone'), 'a rolled-back change is not offered again');
+});
+
+test('undo refuses when the file changed since Claude\'s change', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts/ch3.md');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_c1', 'Claude tightened this.\n');
+  fs.appendFileSync(file, 'Two hours of the writer\'s own prose.\n');
+  const res = run('review.mjs', ['undo', '1'], dir);
+  assert(res.code === 2 && res.out.includes('changed since') && readText(file).includes('Two hours'), `${res.out}${res.err}`);
+});
+
+test('a forced undo keeps the writer\'s text, and the undo can itself be undone', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts/ch3.md');
+  fs.writeFileSync(file, 'Opening.\n');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_c2', 'A better opening.\n');
+  fs.appendFileSync(file, 'Two hours of the writer\'s own prose.\n');
+  const res = run('review.mjs', ['undo', '1', '--go-ahead'], dir);
+  assert(res.code === 0 && readText(file) === 'Opening.\n' && res.out.includes('undo 2'), `${res.out}${res.err}`);
+  assert(historyHolding(dir, 'Two hours'), 'the writer\'s version should be kept in history');
+  const back = run('review.mjs', ['undo', '2'], dir);
+  assert(back.code === 0 && readText(file) === 'A better opening.\nTwo hours of the writer\'s own prose.\n', `undoing the undo should bring it back: ${back.out}${back.err}`);
+  assert(/^1\t.*\tedited\t/m.test(run('review.mjs', ['list'], dir).out), 'change #1 is back in effect');
+});
+
+test('a created file the writer edited since: undo refuses, going ahead moves it to the trash', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts/new.md');
+  hook(dir, 'Write', { file_path: file }, 'toolu_created');
+  fs.writeFileSync(file, 'new\n');
+  run('log-change.mjs', [], dir, { cwd: dir, tool_name: 'Write', tool_input: { file_path: file }, tool_use_id: 'toolu_created' });
+  fs.appendFileSync(file, 'the writer added this\n');
+  assert(run('review.mjs', ['undo', '1'], dir).code === 2, 'expected a refusal');
+  const res = run('review.mjs', ['undo', '1', '--go-ahead'], dir);
+  const trash = fs.readdirSync(marginPath(dir, 'trash'));
+  assert(res.code === 0 && !fs.existsSync(file) && trash.length === 1 && readText(marginPath(dir, path.join('trash', trash[0]))).includes('the writer added this'), `${res.out}${res.err}`);
+});
+
+test('older log entries without ids or fingerprints still undo, keeping a copy first', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts/ch3.md');
+  putMargin(dir, 'history/2026-01-01T00-00-00-000Z__drafts__ch3.md', 'original\n');
+  putMargin(dir, 'log.jsonl', JSON.stringify({ time: '2026-01-01T00:00:01.000Z', tool: 'Edit', file: 'drafts/ch3.md', created: false, snapshot: '.margin/history/2026-01-01T00-00-00-000Z__drafts__ch3.md' }) + '\n');
+  fs.writeFileSync(file, 'current\n');
+  const res = run('review.mjs', ['undo', '1'], dir);
+  assert(res.code === 0 && readText(file) === 'original\n' && historyHolding(dir, 'current'), `${res.out}${res.err}`);
+  const lines = readText(marginPath(dir, 'log.jsonl')).trim().split('\n').map((l) => JSON.parse(l));
+  assert(lines[0].id === 1 && lines[0].undone && lines[1].id === 2 && lines[1].tool === 'undo', JSON.stringify(lines));
+});
+
+test('/margin:review lists changes in local time', () => {
+  const dir = project();
+  setUp(dir);
+  putMargin(dir, 'log.jsonl', JSON.stringify({ id: 1, time: '2026-11-10T16:40:00.000Z', tool: 'Edit', file: 'drafts/ch3.md', created: false, snapshot: null }) + '\n');
+  const out = run('review.mjs', ['list'], dir, null, { TZ: 'Asia/Tokyo' }).out;
+  assert(out.includes('2026-11-11 01:40'), `expected Tokyo time: ${out}`);
+});
+
+async function logAtTheSameMoment(dir, count) {
+  const children = [];
+  for (let i = 0; i < count; i++) {
+    const file = path.join(dir, `drafts/c${i}.md`);
+    fs.writeFileSync(file, `c${i}\n`);
+    children.push(new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.join(scripts, 'log-change.mjs')], { cwd: dir, env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_PLUGIN_ROOT: path.join(scripts, '..') } });
+      child.on('close', resolve);
+      child.stdin.end(JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: file }, tool_use_id: `toolu_same${i}`, hook_event_name: 'PostToolUse' }));
+    }));
+  }
+  await Promise.all(children);
+}
+const sameMoment = project();
+setUp(sameMoment);
+await logAtTheSameMoment(sameMoment, 8);
+test('changes logged at the same moment get different numbers', () => {
+  const ids = readText(marginPath(sameMoment, 'log.jsonl')).trim().split('\n').map((l) => JSON.parse(l).id);
+  assert(ids.length === 8 && new Set(ids).size === 8 && Math.max(...ids) === 8, `ids: ${ids}`);
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
