@@ -17,7 +17,9 @@ If they typed `undo`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" --proje
 
 Run the inventory. It lists files by kind, date and size, plus identical copies, without opening them:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/inventory.mjs" --project "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/inventory.mjs" --project "${CLAUDE_PROJECT_DIR}" "<folder>"`
+
+Use the folder they named, in double quotes so a name with spaces stays one path; leave it out to look at the whole project.
 
 Read the settings for the folder names the writer already chose:
 

@@ -18,6 +18,27 @@ if (current.state === 'damaged' || current.warning) {
   say(`Margin's focus list was damaged (${current.problem || current.warning}). A copy was kept as ${rel(root, repaired.kept)}, and the list was repaired with what could still be read. Check it below.`);
 }
 
+// A path with spaces typed without quotes arrives as several words. When a word
+// isn't a path on its own but it and the words after it are, put them back
+// together (and say so), rather than acting on the wrong file.
+function rejoin(words, isPath) {
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    if (isPath(words[i])) { out.push(words[i]); continue; }
+    let j = i + 1;
+    while (j < words.length && !isPath(words.slice(i, j + 1).join(' '))) j++;
+    if (j < words.length) {
+      const joined = words.slice(i, j + 1).join(' ');
+      say(`Read "${words.slice(i, j + 1).join('" "')}" as one path: "${joined}".`);
+      out.push(joined);
+      i = j;
+    } else {
+      out.push(words[i]);
+    }
+  }
+  return out;
+}
+
 function show() {
   say(`Focus is ${focus.enabled ? 'ON' : 'OFF'}.`);
   if (focus.paths.length) {
@@ -35,14 +56,16 @@ switch (command) {
     break;
   case 'add': {
     if (!items.length) { say('Name at least one file or folder to add.'); process.exit(1); }
+    const exists = (p) => fs.existsSync(path.resolve(root, p));
     const missing = [];
-    for (const item of items) {
-      const target = path.resolve(root, item);
-      if (!fs.existsSync(target)) { missing.push(item); continue; }
-      const r = rel(root, target);
+    let found = 0;
+    for (const item of rejoin(items, exists)) {
+      if (!exists(item)) { missing.push(item); continue; }
+      found++;
+      const r = rel(root, item);
       if (!focus.paths.includes(r)) focus.paths.push(r);
     }
-    if (missing.length === items.length) {
+    if (!found) {
       // Only typos: change nothing, rather than switching focus on with nothing to read.
       say(`Not found: ${missing.join(', ')}. Nothing was added, so focus stays ${focus.enabled ? 'ON' : 'OFF'}.`);
       show();
@@ -57,7 +80,7 @@ switch (command) {
     break;
   }
   case 'remove': {
-    const drop = new Set(items.map((i) => rel(root, i)));
+    const drop = new Set(rejoin(items, (p) => focus.paths.includes(rel(root, p))).map((i) => rel(root, i)));
     focus.paths = focus.paths.filter((p) => !drop.has(p));
     saveFocus(root, focus);
     show();

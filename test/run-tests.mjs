@@ -819,6 +819,27 @@ test('focus add with only paths that don\'t exist leaves focus as it was', () =>
   assert(JSON.parse(readText(marginPath(off, 'focus.json'))).enabled === false, 'a list that was off stays off');
 });
 
+// --- Paths with spaces stay one path (A-18) ---
+
+test('focus add old drafts, typed without quotes, adds "old drafts", not "drafts"', () => {
+  const dir = project();
+  fs.mkdirSync(path.join(dir, 'old drafts'));
+  const add = run('focus.mjs', ['add', 'old', 'drafts'], dir);
+  const saved = JSON.parse(readText(marginPath(dir, 'focus.json'))).paths;
+  assert(saved.join('|') === 'old drafts' && add.out.includes('as one path'), `expected only "old drafts": ${saved} / ${add.out}`);
+  run('focus.mjs', ['add', 'drafts'], dir);
+  run('focus.mjs', ['remove', 'old', 'drafts'], dir);
+  assert(JSON.parse(readText(marginPath(dir, 'focus.json'))).paths.join('|') === 'drafts', 'remove should take "old drafts" out and keep "drafts"');
+});
+
+test('skills quote each path they pass to a script', () => {
+  const skills = path.join(scripts, '..', 'skills');
+  for (const name of fs.readdirSync(skills)) {
+    const text = fs.readFileSync(path.join(skills, name, 'SKILL.md'), 'utf8');
+    assert(!/\.mjs" --project "\$\{CLAUDE_PROJECT_DIR\}" \$ARGUMENTS/.test(text), `${name}/SKILL.md passes $ARGUMENTS unquoted`);
+  }
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });

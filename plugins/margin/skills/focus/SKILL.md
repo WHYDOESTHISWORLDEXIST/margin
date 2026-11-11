@@ -15,9 +15,11 @@ Before any command that changes focus (anything but `status`), run `node "${CLAU
 
 ## If they gave a command
 
-Run it and show the result as is:
+Run it with the command and paths they typed, each path in its own double quotes so a name with spaces stays one path, and show the result as is:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/focus.mjs" --project "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/focus.mjs" --project "${CLAUDE_PROJECT_DIR}" <command> "<path>" "<path>"`
+
+For example, `/margin:focus add old drafts/ch 1.md notes` becomes `add "old drafts/ch 1.md" "notes"` when those are the files that exist; check with Glob if you're unsure where one name ends.
 
 Commands: `status`, `add <path...>`, `remove <path...>`, `on`, `off`, `clear`. Adding the first path turns focus on automatically.
 

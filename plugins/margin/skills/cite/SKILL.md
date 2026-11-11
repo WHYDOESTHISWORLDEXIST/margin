@@ -15,7 +15,9 @@ The writer typed: `$ARGUMENTS`
 
 2. Run the checker. The bibliography comes from the arguments, then from the `bibliography` setting, then from the first `.bib` file in the project:
 
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" "<draft>" "<library.bib>"`
+
+   Use the draft and library they named, each in its own double quotes so a name with spaces stays one path; leave out the library if they didn't name one.
 
 3. If no library was found, say so in one line and suggest exporting one from Zotero with Better BibTeX, then saving its path with `/margin:setup`. Stop there.
 
