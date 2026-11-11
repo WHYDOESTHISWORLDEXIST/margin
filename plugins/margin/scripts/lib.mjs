@@ -351,6 +351,24 @@ export function rel(root, target) {
   return path.relative(root, path.resolve(root, target)).split(path.sep).join('/') || '.';
 }
 
+// Where a path really points, following links (symlinks, Windows junctions,
+// macOS's /var -> /private/var). For a path that doesn't exist yet, the nearest
+// existing folder above it is resolved and the rest is kept as written.
+export function realPath(p) {
+  const tail = [];
+  let base = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(base), ...tail);
+    } catch {
+      const parent = path.dirname(base);
+      if (parent === base) return path.resolve(p);
+      tail.unshift(path.basename(base));
+      base = parent;
+    }
+  }
+}
+
 // A key that is equal for two paths naming the same file (case-insensitive where the OS is).
 export function fileKey(root, p) {
   return normalize(path.resolve(root, p));

@@ -840,6 +840,27 @@ test('skills quote each path they pass to a script', () => {
   }
 });
 
+// --- Links can't carry a read outside focus (A-20) ---
+
+test('focus: a link inside a focus folder that points outside it is denied', () => {
+  const dir = project();
+  // A junction on Windows (no admin rights needed), a symlink elsewhere.
+  fs.symlinkSync(path.join(dir, 'notes'), path.join(dir, 'drafts', 'research'), 'junction');
+  run('focus.mjs', ['add', 'drafts'], dir);
+  assert(readText(path.join(dir, 'drafts', 'research', 'private.md')) === 'Not for Claude.\n', 'the link should work at the OS level');
+  assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'drafts', 'research', 'private.md') })) === 'deny', 'reading through the link must be denied');
+  assert(decisionOf(hook(dir, 'Grep', { pattern: 'Claude', path: path.join(dir, 'drafts', 'research') })) === 'deny', 'searching through the link must be denied');
+  assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'drafts', 'ch3.md') })) === 'allow', 'ordinary files in the folder stay readable');
+});
+
+test('focus: a link from outside that points into a focus folder reads what focus allows', () => {
+  const dir = project();
+  fs.symlinkSync(path.join(dir, 'drafts'), path.join(dir, 'notes', 'current'), 'junction');
+  run('focus.mjs', ['add', 'drafts'], dir);
+  assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'notes', 'current', 'ch3.md') })) === 'allow', 'the real file is in the focus list');
+  assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'drafts', 'not-yet.md') })) === 'allow', 'a file that doesn\'t exist yet in a focus folder is still inside it');
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });

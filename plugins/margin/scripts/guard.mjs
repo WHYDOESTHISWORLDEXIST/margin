@@ -9,7 +9,7 @@
 // (never its edits) with a message saying how to repair it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, isInside, rel, writeJson, appendLine, newSnapshot, fileKey } from './lib.mjs';
+import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, isInside, rel, writeJson, appendLine, newSnapshot, fileKey, realPath } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -32,37 +32,45 @@ function deny(reason) {
   process.exit(0);
 }
 
-// Margin's own files right inside .margin/ (settings, focus list, notes, logs) stay
-// readable. Not .margin/history/ or .margin/trash/: they hold copies of the
-// writer's files, including ones outside the focus list.
+// Focus decisions compare real locations: a link (symlink or Windows junction)
+// inside a focus folder can't reach outside it, and a path reached through a
+// linked folder (like macOS's /var -> /private/var) still matches.
+let realRootCache;
+const realRoot = () => (realRootCache ??= realPath(root));
+
 // Claude Code's own working files for this session: its scratchpad, and the
 // folder next to the transcript where it saves long tool results for Claude to
 // read back. Only outside the project, so they can never open a hole in it.
 function sessionFolders() {
   const out = [];
-  if (typeof input.scratchpad_dir === 'string' && input.scratchpad_dir.trim()) out.push(path.resolve(input.scratchpad_dir));
+  if (typeof input.scratchpad_dir === 'string' && input.scratchpad_dir.trim()) out.push(realPath(input.scratchpad_dir));
   if (typeof input.transcript_path === 'string' && /\.jsonl$/i.test(input.transcript_path)) {
     const t = path.resolve(input.transcript_path);
-    out.push(path.join(path.dirname(t), path.basename(t).replace(/\.jsonl$/i, '')));
+    out.push(realPath(path.join(path.dirname(t), path.basename(t).replace(/\.jsonl$/i, ''))));
   }
-  return out.filter((dir) => !isInside(dir, root) && !isInside(root, dir));
+  return out.filter((dir) => !isInside(dir, realRoot()) && !isInside(realRoot(), dir));
 }
 
-function alwaysAllowed(target) {
+// Always readable: the plugin's own files, the session folders above, and
+// Margin's own files right inside .margin/ (settings, focus list, notes, logs).
+// Not .margin/history/ or .margin/trash/: they hold copies of the writer's
+// files, including ones outside the focus list.
+function alwaysAllowed(real) {
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  if (pluginRoot && isInside(target, pluginRoot)) return true;
-  if (sessionFolders().some((dir) => isInside(target, dir))) return true;
-  if (fileKey(root, path.dirname(target)) !== fileKey(root, marginDir(root))) return false;
-  if (['history', 'trash'].includes(path.basename(target).toLowerCase())) return false;
-  try { return !fs.statSync(target).isDirectory(); } catch { return true; }
+  if (pluginRoot && isInside(real, realPath(pluginRoot))) return true;
+  if (sessionFolders().some((dir) => isInside(real, dir))) return true;
+  if (fileKey(root, path.dirname(real)) !== fileKey(root, realPath(marginDir(root)))) return false;
+  if (['history', 'trash'].includes(path.basename(real).toLowerCase())) return false;
+  try { return !fs.statSync(real).isDirectory(); } catch { return true; }
 }
 
 function focusCheck(target, focus) {
-  if (alwaysAllowed(target)) return;
-  const ok = focus.paths.some((p) => isInside(target, path.resolve(root, p)));
+  const real = realPath(target);
+  if (alwaysAllowed(real)) return;
+  const ok = focus.paths.some((p) => isInside(real, realPath(path.resolve(root, p))));
   if (ok) return;
   const list = focus.paths.length ? focus.paths.join(', ') : '(nothing picked yet)';
-  if (!isInside(target, root)) {
+  if (!isInside(real, realRoot())) {
     deny(`Margin focus is on, and ${target} is outside this project. Claude can read only: ${list}. Ask the writer before going further.`);
   }
   deny(
@@ -83,7 +91,7 @@ function checkFocus() {
   const focus = readFocus(root);
   if (focus.state === 'damaged') {
     const target = readTarget();
-    if (target && alwaysAllowed(target)) return;
+    if (target && alwaysAllowed(realPath(target))) return;
     deny(
       `Margin's focus list (.margin/focus.json) is damaged (${focus.problem}), so reading files is paused to keep the writer's focus. ` +
       'Ask the writer to run /margin:focus status, which repairs it.'
