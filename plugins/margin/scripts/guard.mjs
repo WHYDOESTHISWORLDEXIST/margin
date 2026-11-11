@@ -35,9 +35,23 @@ function deny(reason) {
 // Margin's own files right inside .margin/ (settings, focus list, notes, logs) stay
 // readable. Not .margin/history/ or .margin/trash/: they hold copies of the
 // writer's files, including ones outside the focus list.
+// Claude Code's own working files for this session: its scratchpad, and the
+// folder next to the transcript where it saves long tool results for Claude to
+// read back. Only outside the project, so they can never open a hole in it.
+function sessionFolders() {
+  const out = [];
+  if (typeof input.scratchpad_dir === 'string' && input.scratchpad_dir.trim()) out.push(path.resolve(input.scratchpad_dir));
+  if (typeof input.transcript_path === 'string' && /\.jsonl$/i.test(input.transcript_path)) {
+    const t = path.resolve(input.transcript_path);
+    out.push(path.join(path.dirname(t), path.basename(t).replace(/\.jsonl$/i, '')));
+  }
+  return out.filter((dir) => !isInside(dir, root) && !isInside(root, dir));
+}
+
 function alwaysAllowed(target) {
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && isInside(target, pluginRoot)) return true;
+  if (sessionFolders().some((dir) => isInside(target, dir))) return true;
   if (fileKey(root, path.dirname(target)) !== fileKey(root, marginDir(root))) return false;
   if (['history', 'trash'].includes(path.basename(target).toLowerCase())) return false;
   try { return !fs.statSync(target).isDirectory(); } catch { return true; }
@@ -46,14 +60,16 @@ function alwaysAllowed(target) {
 function focusCheck(target, focus) {
   if (alwaysAllowed(target)) return;
   const ok = focus.paths.some((p) => isInside(target, path.resolve(root, p)));
-  if (!ok) {
-    const list = focus.paths.length ? focus.paths.join(', ') : '(nothing picked yet)';
-    deny(
-      `Margin focus is on, and ${rel(root, target)} isn't in it. ` +
-      `Claude can read only: ${list}. ` +
-      `Ask the writer before going further. They can widen it with "/margin:focus add ${rel(root, target)}" or turn it off with "/margin:focus off".`
-    );
+  if (ok) return;
+  const list = focus.paths.length ? focus.paths.join(', ') : '(nothing picked yet)';
+  if (!isInside(target, root)) {
+    deny(`Margin focus is on, and ${target} is outside this project. Claude can read only: ${list}. Ask the writer before going further.`);
   }
+  deny(
+    `Margin focus is on, and ${rel(root, target)} isn't in it. ` +
+    `Claude can read only: ${list}. ` +
+    `Ask the writer before going further. They can widen it with "/margin:focus add ${rel(root, target)}" or turn it off with "/margin:focus off".`
+  );
 }
 
 function readTarget() {

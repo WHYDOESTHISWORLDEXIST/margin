@@ -768,6 +768,42 @@ test('focus on: backups and trashed files can\'t be read or searched; Margin\'s 
   }
 });
 
+// --- Focus leaves Claude Code's own session files alone (A-09/B-20) ---
+
+function readWith(dir, filePath, extra) {
+  return run('guard.mjs', [], dir, { cwd: dir, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: filePath }, tool_use_id: 'toolu_s', ...extra });
+}
+
+test('focus on: Claude Code\'s saved tool output and scratchpad stay readable, nothing else of its', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const claudeHome = path.join(path.dirname(dir), 'claude home');
+  const session = {
+    transcript_path: path.join(claudeHome, 'projects', 'my-book', 'sess-1.jsonl'),
+    scratchpad_dir: path.join(path.dirname(dir), 'scratch', 'sess-1')
+  };
+  assert(decisionOf(readWith(dir, path.join(claudeHome, 'projects', 'my-book', 'sess-1', 'tool-results', 'toolu_9.txt'), session)) === 'allow', 'saved tool output should be readable');
+  assert(decisionOf(readWith(dir, path.join(session.scratchpad_dir, 'notes.txt'), session)) === 'allow', 'the scratchpad should be readable');
+  for (const other of [path.join(claudeHome, 'settings.json'), path.join(claudeHome, 'projects', 'my-book', 'sess-2', 'tool-results', 'x.txt')]) {
+    assert(decisionOf(readWith(dir, other, session)) === 'deny', `${other} should stay blocked`);
+  }
+});
+
+test('a session folder inside the project opens no hole in focus', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const inside = { transcript_path: path.join(dir, 'notes.jsonl'), scratchpad_dir: path.join(dir, 'notes') };
+  assert(decisionOf(readWith(dir, path.join(dir, 'notes', 'private.md'), inside)) === 'deny', 'notes/ must stay blocked');
+});
+
+test('a read outside the project is denied with its full path and no focus suggestion', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const outside = path.join(path.dirname(dir), 'elsewhere', 'diary.md');
+  const reason = reasonOf(readWith(dir, outside, {}));
+  assert(reason.includes(outside) && reason.includes('outside this project') && !reason.includes('/margin:focus add') && !reason.includes('../'), reason);
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });
