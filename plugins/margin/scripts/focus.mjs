@@ -42,6 +42,12 @@ switch (command) {
       const r = rel(root, target);
       if (!focus.paths.includes(r)) focus.paths.push(r);
     }
+    if (missing.length === items.length) {
+      // Only typos: change nothing, rather than switching focus on with nothing to read.
+      say(`Not found: ${missing.join(', ')}. Nothing was added, so focus stays ${focus.enabled ? 'ON' : 'OFF'}.`);
+      show();
+      process.exit(1);
+    }
     const wasOff = !focus.enabled;
     focus.enabled = true;
     saveFocus(root, focus);

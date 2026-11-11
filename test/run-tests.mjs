@@ -359,7 +359,7 @@ test('hooks started in a subfolder use the .margin of the project above it', () 
 test('with no .margin anywhere, a new one goes at the folder with .git, else the current folder', () => {
   const withGit = project();
   fs.mkdirSync(path.join(withGit, '.git'));
-  shellRun('focus.mjs', ['add', 'ch3.md'], path.join(withGit, 'drafts'));
+  shellRun('focus.mjs', ['add', 'drafts/ch3.md'], path.join(withGit, 'drafts'));
   assert(marginDirsIn(withGit).join() === '.', `expected .margin at the git root, found ${marginDirsIn(withGit)}`);
   const plain = project();
   shellRun('focus.mjs', ['add', 'ch3.md'], path.join(plain, 'drafts'));
@@ -802,6 +802,21 @@ test('a read outside the project is denied with its full path and no focus sugge
   const outside = path.join(path.dirname(dir), 'elsewhere', 'diary.md');
   const reason = reasonOf(readWith(dir, outside, {}));
   assert(reason.includes(outside) && reason.includes('outside this project') && !reason.includes('/margin:focus add') && !reason.includes('../'), reason);
+});
+
+// --- A mistyped focus add changes nothing (A-19) ---
+
+test('focus add with only paths that don\'t exist leaves focus as it was', () => {
+  const fresh = project();
+  const res = run('focus.mjs', ['add', 'drafts/chapter3.md'], fresh);
+  assert(res.code === 1 && res.out.includes('Nothing was added') && res.out.includes('stays OFF'), res.out);
+  assert(!fs.existsSync(marginPath(fresh, 'focus.json')), 'no focus list should be created');
+  assert(decisionOf(hook(fresh, 'Read', { file_path: path.join(fresh, 'drafts/ch3.md') })) === 'allow', 'reads should not be blocked');
+  const off = project();
+  run('focus.mjs', ['add', 'drafts'], off);
+  run('focus.mjs', ['off'], off);
+  run('focus.mjs', ['add', 'nope.md'], off);
+  assert(JSON.parse(readText(marginPath(off, 'focus.json'))).enabled === false, 'a list that was off stays off');
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
