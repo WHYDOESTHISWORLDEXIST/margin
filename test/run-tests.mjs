@@ -690,6 +690,63 @@ test('a pending record older than a day is swept with its backup; newer ones sta
   assert(backupFiles(dir).length === 2, `the declined edit's backup should be gone: ${backupFiles(dir)}`);
 });
 
+// --- Organize never loses track of a move (A-07/B-10) ---
+
+function plan(dir, steps) {
+  putMargin(dir, 'plan.json', JSON.stringify(steps));
+  return run('move.mjs', ['apply', '.margin/plan.json'], dir);
+}
+
+test('organize records the moves made before a step fails, so undo puts them back', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'a.md'), 'a\n');
+  fs.writeFileSync(path.join(dir, 'c.md'), 'c\n');
+  const res = plan(dir, [
+    { from: 'a.md', to: 'archive/a.md' },
+    { from: 'drafts/ch3.md', to: 'old copy.md/inside/ch3.md' },   // under a file: can't be done
+    { from: 'c.md', to: 'archive/c.md' }
+  ]);
+  assert(res.code === 0 && res.err === '' && res.out.includes('skipped drafts/ch3.md') && res.out.includes('2 of 3 moved'), `${res.out}${res.err}`);
+  const undo = run('move.mjs', ['undo'], dir);
+  assert(fs.existsSync(path.join(dir, 'a.md')) && fs.existsSync(path.join(dir, 'c.md')) && undo.out.includes('Put back 2 of 2'), `${undo.out}${undo.err}`);
+});
+
+test('organize refuses .git, .margin, node_modules, the project folder and a folder moved into itself', () => {
+  const dir = project();
+  fs.mkdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(path.join(dir, '.git', 'config'), '[core]\n');
+  fs.mkdirSync(path.join(dir, 'node_modules'));
+  const res = plan(dir, [
+    { from: '.git/config', to: 'archive/gitconfig' },
+    { from: 'notes/private.md', to: '.margin/private.md' },
+    { from: 'drafts/ch3.md', to: 'node_modules/ch3.md' },
+    { from: '.', to: 'archive/everything' },
+    { from: 'notes', to: 'notes/older/notes' }
+  ]);
+  assert(res.out.includes('0 of 5 moved') && (res.out.match(/^skipped /gm) || []).length === 5, res.out);
+  assert(fs.existsSync(path.join(dir, '.git/config')) && fs.existsSync(path.join(dir, 'notes/private.md')) && fs.existsSync(path.join(dir, 'drafts/ch3.md')), 'nothing should move');
+});
+
+test('organize reports a malformed plan step instead of crashing', () => {
+  const dir = project();
+  const res = plan(dir, [{ from: 'old copy.md' }, null, 'notes', { from: 1, to: 2 }, { from: 'old copy.md', to: 'archive/old copy.md' }]);
+  assert(res.code === 0 && res.err === '' && (res.out.match(/needs a "from" and a "to"/g) || []).length === 4 && res.out.includes('1 of 5 moved'), `${res.out}${res.err}`);
+});
+
+test('organize undo keeps the moves it couldn\'t put back, and a second undo finishes them', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'x.md'), 'x\n');
+  fs.writeFileSync(path.join(dir, 'y.md'), 'y\n');
+  plan(dir, [{ from: 'x.md', to: 'archive/x.md' }, { from: 'y.md', to: 'archive/y.md' }]);
+  fs.writeFileSync(path.join(dir, 'y.md'), 'a new y.md the writer made meanwhile\n');
+  const first = run('move.mjs', ['undo'], dir);
+  assert(first.out.includes('Put back 1 of 2') && first.out.includes('undo again') && fs.existsSync(path.join(dir, 'archive/y.md')), first.out);
+  fs.renameSync(path.join(dir, 'y.md'), path.join(dir, 'y (new).md'));
+  const second = run('move.mjs', ['undo'], dir);
+  assert(second.out.includes('Put back 1 of 1') && readText(path.join(dir, 'y.md')) === 'y\n', second.out);
+  assert(run('move.mjs', ['undo'], dir).out.includes('Nothing to undo'), 'the log should be empty now');
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });
