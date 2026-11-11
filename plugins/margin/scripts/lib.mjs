@@ -187,7 +187,20 @@ function usableDir(value) {
   return path.resolve(v);
 }
 
-const samePath = (a, b) => (IS_WINDOWS ? a.toLowerCase() === b.toLowerCase() : a === b);
+// Whether file names ignore case is a property of the drive, not the OS: macOS
+// drives usually ignore it (but can be case-sensitive), Linux ones usually
+// don't (but USB sticks do). Start from the OS's usual rule and, once the
+// project folder is known, check: look for that folder under its name with the
+// case flipped.
+let caseInsensitive = IS_WINDOWS || process.platform === 'darwin';
+export function learnCaseRule(dir) {
+  const name = path.basename(dir);
+  const flipped = name === name.toLowerCase() ? name.toUpperCase() : name.toLowerCase();
+  if (flipped !== name && fs.existsSync(dir)) caseInsensitive = fs.existsSync(path.join(path.dirname(dir), flipped));
+  return caseInsensitive;
+}
+
+const samePath = (a, b) => (caseInsensitive ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 // The nearest folder at or above `start` passing `test`. It never climbs to the
 // home folder (or above it) from below, so a stray .margin there can't capture
@@ -216,10 +229,28 @@ export function projectDir(input = {}) {
   if (projectFlag === undefined) scriptArgs();
   const explicit = usableDir(process.env.CLAUDE_PROJECT_DIR) || usableDir(projectFlag);
   const start = explicit || usableDir(input.cwd) || path.resolve(process.cwd());
-  const marked = findUp(start, hasMarginMarker);
-  if (marked) return marked;
-  if (explicit) return explicit;
-  return findUp(start, (dir) => fs.existsSync(path.join(dir, '.git'))) || start;
+  const root = findUp(start, hasMarginMarker) || explicit || findUp(start, (dir) => fs.existsSync(path.join(dir, '.git'))) || start;
+  learnCaseRule(root);
+  return root;
+}
+
+// A project-relative path spelled the way it is on disk ("Drafts/Ch3.md" for a
+// typed "drafts/ch3.md" on a drive that ignores case), so lists Margin keeps
+// match what Claude's tools report. Parts that don't exist are kept as typed.
+export function onDiskSpelling(root, relPath) {
+  let dir = root;
+  const out = [];
+  for (const part of relPath.split('/').filter(Boolean)) {
+    let name = part;
+    if (part !== '.' && part !== '..') {
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch { /* not a folder */ }
+      if (!names.includes(part)) name = names.find((n) => n.toLowerCase() === part.toLowerCase()) || part;
+    }
+    out.push(name);
+    dir = path.join(dir, name);
+  }
+  return out.join('/') || '.';
 }
 
 export function marginDir(root) {
@@ -335,7 +366,7 @@ export function saveFocus(root, focus) {
 
 function normalize(p) {
   const resolved = path.resolve(p);
-  return IS_WINDOWS ? resolved.toLowerCase() : resolved;
+  return caseInsensitive ? resolved.toLowerCase() : resolved;
 }
 
 // True when `target` is `base` itself or anything below it.

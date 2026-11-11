@@ -3,7 +3,7 @@
 // A damaged focus list is repaired first (a copy is kept), whatever the command.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel } from './lib.mjs';
+import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel, onDiskSpelling } from './lib.mjs';
 
 const root = projectDir();
 const [command = 'status', ...items] = scriptArgs();
@@ -62,7 +62,7 @@ switch (command) {
     for (const item of rejoin(items, exists)) {
       if (!exists(item)) { missing.push(item); continue; }
       found++;
-      const r = rel(root, item);
+      const r = onDiskSpelling(root, rel(root, item));
       if (!focus.paths.includes(r)) focus.paths.push(r);
     }
     if (!found) {

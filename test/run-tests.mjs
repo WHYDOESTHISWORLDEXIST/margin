@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -859,6 +859,32 @@ test('focus: a link from outside that points into a focus folder reads what focu
   run('focus.mjs', ['add', 'drafts'], dir);
   assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'notes', 'current', 'ch3.md') })) === 'allow', 'the real file is in the focus list');
   assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'drafts', 'not-yet.md') })) === 'allow', 'a file that doesn\'t exist yet in a focus folder is still inside it');
+});
+
+// --- Drives that ignore case (A-21) ---
+
+const driveIgnoresCase = (dir) => fs.existsSync(path.join(dir, 'DRAFTS'));
+
+test('focus add stores names as they are on disk', () => {
+  const dir = project();
+  fs.mkdirSync(path.join(dir, 'Research'));
+  fs.writeFileSync(path.join(dir, 'Research', 'Interviews.md'), 'x\n');
+  const res = run('focus.mjs', ['add', 'research/interviews.md'], dir);
+  if (driveIgnoresCase(dir)) {
+    assert(JSON.parse(readText(marginPath(dir, 'focus.json'))).paths.join() === 'Research/Interviews.md', `expected the on-disk spelling: ${res.out}`);
+  } else {
+    assert(res.out.includes('Not found'), 'on a case-sensitive drive the typed name is a different file');
+  }
+});
+
+test('path comparisons follow the drive, not the OS: a macOS-style run on a drive that ignores case', () => {
+  const dir = project();
+  const preload = path.join(dir, 'as-macos.cjs');
+  fs.writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'darwin' });\n");
+  const lib = pathToFileURL(path.join(scripts, 'lib.mjs')).href;
+  const code = `const l = await import(${JSON.stringify(lib)}); l.projectDir(); console.log(l.IS_WINDOWS, l.isInside(${JSON.stringify(path.join(dir, 'drafts', 'ch3.md'))}, ${JSON.stringify(path.join(dir, 'DRAFTS'))}));`;
+  const res = spawnSync(process.execPath, ['-r', preload, '--input-type=module', '-e', code], { cwd: dir, env: { ...process.env, CLAUDE_PROJECT_DIR: dir }, encoding: 'utf8' });
+  assert(res.stdout.trim() === `false ${driveIgnoresCase(dir)}`, `expected "false ${driveIgnoresCase(dir)}": ${res.stdout}${res.stderr}`);
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
