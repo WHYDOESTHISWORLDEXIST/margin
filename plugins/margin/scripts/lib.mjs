@@ -266,14 +266,62 @@ export function loadSettings(root) {
   return readSettings(root).settings;
 }
 
-export function loadFocus(root) {
-  const r = readJson(path.join(marginDir(root), 'focus.json'));
-  const focus = r.state === 'ok' && isPlainObject(r.value) ? r.value : {};
-  return { enabled: Boolean(focus.enabled), paths: Array.isArray(focus.paths) ? focus.paths : [] };
+// The focus list. { state: 'missing' | 'ok' | 'damaged', enabled, paths, problem, warning }
+// A file that exists but can't be understood is 'damaged': the guard then pauses
+// Claude's reads rather than silently dropping the writer's focus. Entries that
+// aren't file names are left out (that only narrows the list) and named in warning.
+export function readFocus(root) {
+  const r = readJson(focusPath(root));
+  if (r.state === 'missing') return { state: 'missing', enabled: false, paths: [] };
+  const v = r.value;
+  if (r.state === 'damaged' || !isPlainObject(v) || typeof v.enabled !== 'boolean' || !Array.isArray(v.paths)) {
+    return { state: 'damaged', enabled: false, paths: [], problem: r.problem || 'unexpected contents' };
+  }
+  const paths = v.paths.filter((p) => typeof p === 'string' && p.trim() !== '');
+  const dropped = v.paths.length - paths.length;
+  const warning = dropped ? `${dropped} focus entr${dropped === 1 ? 'y that isn\'t a file name was' : 'ies that aren\'t file names were'} ignored` : undefined;
+  return { state: 'ok', enabled: v.enabled, paths, warning };
+}
+
+// Best-effort recovery of a damaged focus file: every complete file name that can
+// still be read, and focus ON unless the file clearly said off.
+export function salvageFocus(root) {
+  let raw = '';
+  try { raw = stripBom(fs.readFileSync(focusPath(root), 'utf8')); } catch { /* unreadable */ }
+  let value;
+  try { value = JSON.parse(raw); } catch { /* damaged */ }
+  let enabled = true;
+  const paths = [];
+  if (isPlainObject(value)) {
+    if (typeof value.enabled === 'boolean') enabled = value.enabled;
+    else if (value.enabled === 'false') enabled = false;
+    const list = Array.isArray(value.paths) ? value.paths : [value.paths];
+    for (const p of list) if (typeof p === 'string' && p.trim()) paths.push(p);
+  } else {
+    const flag = /"enabled"\s*:\s*(true|false)/.exec(raw);
+    if (flag) enabled = flag[1] === 'true';
+    const start = raw.search(/"paths"\s*:\s*\[/);
+    if (start >= 0) {
+      const body = raw.slice(raw.indexOf('[', start) + 1);
+      const list = body.includes(']') ? body.slice(0, body.indexOf(']')) : body;
+      for (const m of list.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) {
+        try { const p = JSON.parse(`"${m[1]}"`); if (p.trim()) paths.push(p); } catch { /* skip */ }
+      }
+    }
+  }
+  return { enabled, paths: [...new Set(paths)] };
+}
+
+// Keep a copy of the damaged file, then write the salvaged list in its place.
+export function repairFocus(root) {
+  const salvaged = salvageFocus(root);
+  const kept = keepAside(focusPath(root));
+  saveFocus(root, salvaged);
+  return { kept, ...salvaged };
 }
 
 export function saveFocus(root, focus) {
-  writeJsonAtomic(path.join(marginDir(root), 'focus.json'), focus);
+  writeJsonAtomic(focusPath(root), { enabled: Boolean(focus.enabled), paths: focus.paths });
 }
 
 // ---------------------------------------------------------------------------

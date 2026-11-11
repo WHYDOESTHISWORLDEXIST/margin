@@ -1,13 +1,22 @@
 // Manage which files Claude may read.
 // Usage: node focus.mjs status | add <path...> | remove <path...> | on | off | clear
+// A damaged focus list is repaired first (a copy is kept), whatever the command.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, scriptArgs, loadFocus, saveFocus, rel } from './lib.mjs';
+import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel } from './lib.mjs';
 
 const root = projectDir();
 const [command = 'status', ...items] = scriptArgs();
-const focus = loadFocus(root);
 const say = (line) => console.log(line);
+
+const current = readFocus(root);
+const focus = { enabled: current.enabled, paths: current.paths };
+if (current.state === 'damaged' || current.warning) {
+  const repaired = repairFocus(root);
+  focus.enabled = repaired.enabled;
+  focus.paths = repaired.paths;
+  say(`Margin's focus list was damaged (${current.problem || current.warning}). A copy was kept as ${rel(root, repaired.kept)}, and the list was repaired with what could still be read. Check it below.`);
+}
 
 function show() {
   say(`Focus is ${focus.enabled ? 'ON' : 'OFF'}.`);

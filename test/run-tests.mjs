@@ -42,11 +42,11 @@ function project() {
   return dir;
 }
 
-function run(script, args, dir, input) {
+function run(script, args, dir, input, extraEnv = {}) {
   const res = spawnSync(process.execPath, [path.join(scripts, script), ...args], {
     cwd: dir,
     input: input ? JSON.stringify(input) : '',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_PLUGIN_ROOT: path.join(scripts, '..') },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_PLUGIN_ROOT: path.join(scripts, '..'), ...extraEnv },
     encoding: 'utf8'
   });
   return { out: res.stdout, err: res.stderr, code: res.status };
@@ -429,6 +429,76 @@ test('skills set Margin up before they change anything', () => {
   const ensure = 'settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure';
   for (const name of ['check', 'cite', 'focus', 'organize', 'review']) assert(read(name).includes(ensure), `${name} should run settings ensure`);
   assert(read('setup').includes('settings.mjs" --project "${CLAUDE_PROJECT_DIR}" init'), 'setup should run settings init');
+});
+
+// --- A damaged focus list never fails open silently (A-06/B-02) ---
+
+const decisionOf = (res) => (res.out.trim() ? JSON.parse(res.out).hookSpecificOutput.permissionDecision : 'allow');
+const reasonOf = (res) => (res.out.trim() ? JSON.parse(res.out).hookSpecificOutput.permissionDecisionReason : '');
+
+test('a damaged focus list pauses reads, never edits, and says how to repair it', () => {
+  const variants = ['{"enabled": true, "paths": ["dra', '', 'null', '{"enabled": "false", "paths": ["drafts"]}', '{"enabled": true, "paths": "drafts"}', '[]'];
+  for (const text of variants) {
+    const dir = project();
+    putMargin(dir, 'focus.json', text);
+    for (const target of ['notes/private.md', 'drafts/ch3.md']) {
+      const res = hook(dir, 'Read', { file_path: path.join(dir, target) });
+      assert(res.code === 0 && decisionOf(res) === 'deny' && reasonOf(res).includes('/margin:focus status'), `${JSON.stringify(text)} ${target}: ${res.out}${res.err}`);
+    }
+    assert(decisionOf(hook(dir, 'Grep', { pattern: 'mill', path: 'drafts' })) === 'deny', `${JSON.stringify(text)}: Grep should be paused too`);
+    const edit = hook(dir, 'Edit', { file_path: path.join(dir, 'drafts/ch3.md') });
+    assert(edit.code === 0 && edit.out === '', `${JSON.stringify(text)}: edits must never be blocked`);
+  }
+});
+
+test('a focus file that starts with a byte-order mark is read normally', () => {
+  const dir = project();
+  putMargin(dir, 'focus.json', '﻿' + JSON.stringify({ enabled: true, paths: ['drafts'] }));
+  assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'drafts/ch3.md') })) === 'allow', 'listed file should be readable');
+  const outside = hook(dir, 'Read', { file_path: path.join(dir, 'notes/private.md') });
+  assert(decisionOf(outside) === 'deny' && reasonOf(outside).includes("isn't in it"), 'outside file should get the normal focus reason');
+});
+
+test('focus entries that aren\'t file names are ignored without crashing the guard', () => {
+  const dir = project();
+  putMargin(dir, 'focus.json', JSON.stringify({ enabled: true, paths: ['drafts', 7, null, ''] }));
+  const inside = hook(dir, 'Read', { file_path: path.join(dir, 'drafts/ch3.md') });
+  const outside = hook(dir, 'Read', { file_path: path.join(dir, 'notes/private.md') });
+  assert(inside.code === 0 && decisionOf(inside) === 'allow' && decisionOf(outside) === 'deny', `${inside.err}${outside.err}`);
+  const ctx = JSON.parse(run('focus-context.mjs', [], dir, { cwd: dir }).out).hookSpecificOutput.additionalContext;
+  assert(ctx.includes('drafts') && ctx.includes('ignored'), `context should mention the ignored entries: ${ctx}`);
+});
+
+test('focus context tells Claude when the focus list is damaged', () => {
+  const dir = project();
+  putMargin(dir, 'focus.json', '{"enabled": tr');
+  const ctx = JSON.parse(run('focus-context.mjs', [], dir, { cwd: dir }).out).hookSpecificOutput.additionalContext;
+  assert(ctx.includes('damaged') && ctx.includes('/margin:focus status'), ctx);
+});
+
+test('focus status repairs a damaged list and keeps a copy of it', () => {
+  const dir = project();
+  const damaged = '{"enabled": true, "paths": ["drafts", "notes/interviews.md", "sour';
+  putMargin(dir, 'focus.json', damaged);
+  const status = run('focus.mjs', ['status'], dir);
+  const kept = damagedCopies(dir, 'focus.json');
+  assert(kept.length === 1 && fs.readFileSync(marginPath(dir, kept[0]), 'utf8') === damaged, 'the damaged list should be kept');
+  assert(status.out.includes('damaged') && status.out.includes(kept[0]), `status should report the repair: ${status.out}`);
+  const repaired = JSON.parse(fs.readFileSync(marginPath(dir, 'focus.json'), 'utf8'));
+  assert(repaired.enabled === true && repaired.paths.join() === 'drafts,notes/interviews.md', `salvaged list: ${JSON.stringify(repaired)}`);
+  assert(decisionOf(hook(dir, 'Read', { file_path: path.join(dir, 'drafts/ch3.md') })) === 'allow', 'reads in the list work again');
+});
+
+test('if the guard itself fails, reads are paused with a message and edits go ahead', () => {
+  const dir = project();
+  setUp(dir);
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const fail = { MARGIN_TEST_FAIL: 'guard' };
+  const read = run('guard.mjs', [], dir, { cwd: dir, tool_name: 'Read', tool_input: { file_path: path.join(dir, 'drafts/ch3.md') }, tool_use_id: 'toolu_f1', hook_event_name: 'PreToolUse' }, fail);
+  assert(read.code === 0 && decisionOf(read) === 'deny' && reasonOf(read).includes('unexpected problem'), `${read.out}${read.err}`);
+  const edit = run('guard.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: path.join(dir, 'drafts/ch3.md') }, tool_use_id: 'toolu_f2', hook_event_name: 'PreToolUse' }, fail);
+  assert(edit.code === 0 && edit.out === '', 'an edit must not be blocked');
+  assert(fs.readFileSync(marginPath(dir, 'errors.jsonl'), 'utf8').includes('simulated failure'), 'the failure should be recorded');
 });
 
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
