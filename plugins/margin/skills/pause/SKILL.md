@@ -3,7 +3,7 @@ name: pause
 description: Offer a short break when the writer feels stuck, with a choice of a very short story, a walk, something quiet, or a minute of noticing. Use only when the writer runs /margin:pause or asks for a break, a story, or help getting unstuck.
 argument-hint: "[story | walk | quiet | notice] [setting: ...] [symbol: ...] [flash | short | long]"
 disable-model-invocation: true
-allowed-tools: Bash(node *)
+allowed-tools: Bash(node *), PowerShell(node *)
 ---
 
 # A short break

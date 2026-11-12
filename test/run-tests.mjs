@@ -998,6 +998,51 @@ test('the shell guard: a damaged focus list pauses shell reads; its own failure 
   assert(failed.code === 0 && decisionOf(failed) === 'ask', `${failed.out}${failed.err}`);
 });
 
+// --- Margin notes as flags, for every shell (A-10/B-09) ---
+
+const storedNotes = (dir) => JSON.parse(readText(marginPath(dir, 'suggestions.json'))).items;
+
+test('notes can be queued with flags, with quotes, apostrophes and accents intact', () => {
+  const dir = project();
+  const message = 'Says ‘1871’ here; it’s café — notes say "1874".';
+  const res = run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--line', '12', '--kind', 'contradiction', '--message', message, '--source', 'notes/interviews.md:40'], dir);
+  const [n] = storedNotes(dir);
+  assert(res.code === 0 && n.message === message && n.line === 12 && n.kind === 'contradiction' && n.source === 'notes/interviews.md:40' && n.file === 'drafts/ch3.md', `${res.out}${JSON.stringify(n)}`);
+});
+
+test('several notes can be queued in one command; a wrong flag queues nothing', () => {
+  const dir = project();
+  run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--line', '1', '--kind', 'todo', '--message', 'one', '--file', 'drafts/ch3.md', '--line', '2', '--message', 'two'], dir);
+  const notes = storedNotes(dir);
+  assert(notes.length === 2 && notes[0].message === 'one' && notes[1].message === 'two' && notes[1].kind === 'note', JSON.stringify(notes));
+  const other = project();
+  const bad = run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--colour', 'red', '--message', 'x'], other);
+  assert(bad.code === 1 && bad.out.includes('Unknown option') && !fs.existsSync(marginPath(other, 'suggestions.json')), bad.out);
+});
+
+test('notes queued through Windows PowerShell 5.1 arrive intact (Windows only)', () => {
+  if (process.platform !== 'win32') return;
+  const dir = project();
+  const message = 'Says ‘1871’ here; it’s café — notes say 1874.';
+  const ps = `& '${process.execPath}' '${path.join(scripts, 'suggestions.mjs')}' --project '${dir}' add --file "drafts/ch3.md" --line 12 --kind contradiction --message "${message}"`;
+  const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { cwd: dir, encoding: 'utf8', input: '', timeout: 60000 });
+  if (res.error && res.error.code === 'ENOENT') return;   // no Windows PowerShell on this machine
+  const notes = fs.existsSync(marginPath(dir, 'suggestions.json')) ? storedNotes(dir) : [];
+  assert(notes.length === 1 && notes[0].message === message && notes[0].line === 12, `${res.stdout}${res.stderr}${JSON.stringify(notes)}`);
+});
+
+test('the check and cite skills queue notes with flags, and every skill allows its node scripts in PowerShell too', () => {
+  const skills = path.join(scripts, '..', 'skills');
+  const read = (name) => fs.readFileSync(path.join(skills, name, 'SKILL.md'), 'utf8');
+  for (const name of ['check', 'cite']) {
+    assert(read(name).includes('suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add --file') && !/add '[\[{]/.test(read(name)), `${name} should use flags`);
+  }
+  for (const name of fs.readdirSync(skills)) {
+    const tools = /^allowed-tools:(.*)$/m.exec(read(name))[1];
+    assert(tools.includes('Bash(node *)') && tools.includes('PowerShell(node *)'), `${name}: ${tools}`);
+  }
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });

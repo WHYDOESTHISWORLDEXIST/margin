@@ -2,7 +2,7 @@
 name: setup
 description: Set up Margin for this writing project with a few quick questions, no config files to edit. Use when the writer runs /margin:setup or asks to configure Margin.
 disable-model-invocation: true
-allowed-tools: Bash(node *), Glob
+allowed-tools: Bash(node *), PowerShell(node *), Glob
 ---
 
 # Set up Margin

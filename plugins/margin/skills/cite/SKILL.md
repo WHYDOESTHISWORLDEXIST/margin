@@ -2,7 +2,7 @@
 name: cite
 description: Check a draft's citations against the writer's own bibliography (for example a Zotero Better BibTeX export), find typos in citation keys, and fix them only with approval. Never invents a source. Use when the writer runs /margin:cite or asks about missing, broken or unresolved citations.
 argument-hint: "[draft file] [library.bib]"
-allowed-tools: Bash(node *), Read
+allowed-tools: Bash(node *), PowerShell(node *), Read
 ---
 
 # Check citations
@@ -33,4 +33,6 @@ The writer typed: `$ARGUMENTS`
 
 For keys that aren't in the library at all, queue a margin note instead of guessing:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add '{"file":"<draft>","line":<n>,"kind":"citation","message":"@<key> isn’t in your library."}'`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add --file "<draft>" --line <n> --kind citation --message "@<key> isn’t in your library."`
+
+Put each value in straight double quotes; inside a message write apostrophes as ’ and never use double quotes of any kind, `$` or backticks. Repeat the flags, starting each note with `--file`, to queue several notes in one command.

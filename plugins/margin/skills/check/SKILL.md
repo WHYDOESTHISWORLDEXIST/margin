@@ -2,7 +2,7 @@
 name: check
 description: Quietly check a draft against the writer's earlier notes for contradictions, missing citations and loose ends, and leave margin notes instead of editing. Use when the writer runs /margin:check or asks whether a draft contradicts their notes, is missing sources, or has inconsistencies.
 argument-hint: "[draft file]"
-allowed-tools: Bash(node *), Read, Grep, Glob
+allowed-tools: Bash(node *), PowerShell(node *), Read, Grep, Glob
 ---
 
 # Check a draft
@@ -32,11 +32,11 @@ Be conservative. A false alarm costs the writer more than a missed one, so only 
 
 ## 3. Leave notes
 
-Queue every finding at once, with the draft's line number:
+Queue every finding at once, with the draft's line number. Each note starts with `--file`; repeat the flags in the same command for more notes:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add '[{"file":"drafts/ch3.md","line":12,"kind":"contradiction","message":"Says 1871 here; notes/interviews.md:40 says 1874.","source":"notes/interviews.md:40"}]'`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add --file "drafts/ch3.md" --line 12 --kind contradiction --message "Says 1871 here; notes/interviews.md:40 says 1874." --source "notes/interviews.md:40"`
 
-Keep each message under about 25 words and factual. No praise, no "consider rewriting".
+Put each value in straight double quotes. Inside a message, quote with ‘single curly quotes’ and write apostrophes as ’; never use double quotes of any kind (" “ ”), `$` or backticks, so the command works the same in every shell. Keep each message under about 25 words and factual. No praise, no ‘consider rewriting’.
 
 ## 4. Report
 

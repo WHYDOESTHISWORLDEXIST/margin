@@ -2,7 +2,7 @@
 name: review
 description: Show everything Claude has changed in the project, plus open margin notes, and undo any change. Use when the writer runs /margin:review or asks what Claude changed, wants to undo something, or wants to see pending notes.
 argument-hint: "[undo <number> | notes | dismiss <id>]"
-allowed-tools: Bash(node *)
+allowed-tools: Bash(node *), PowerShell(node *)
 ---
 
 # Review: what Claude did

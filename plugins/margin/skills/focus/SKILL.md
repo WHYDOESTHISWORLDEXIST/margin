@@ -2,7 +2,7 @@
 name: focus
 description: Choose exactly which files and folders Claude may read, so it pulls only from the sources the writer picked. Use when the writer runs /margin:focus, or says things like "only use these files", "don't read my other notes", "just look at chapter 3".
 argument-hint: "[add <paths> | remove <paths> | on | off | clear]"
-allowed-tools: Bash(node *), Glob
+allowed-tools: Bash(node *), PowerShell(node *), Glob
 ---
 
 # Focus: pick which files Claude may read

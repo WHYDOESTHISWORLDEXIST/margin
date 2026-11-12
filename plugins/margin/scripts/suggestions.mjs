@@ -1,7 +1,9 @@
 // The margin notes queue in .margin/suggestions.json. Claude adds notes here
 // instead of editing the draft; the VS Code companion shows them at a pause.
 // Usage:
-//   node suggestions.mjs add '<json>'      one note, or a JSON list of notes
+//   node suggestions.mjs add --file <path> --line <n> --kind <kind> --message <text> [--source <where>]
+//                                          repeat the flags for more notes; each note starts with --file
+//   node suggestions.mjs add '<json>'      one note, or a JSON list of notes (older form)
 //   node suggestions.mjs list [--all]
 //   node suggestions.mjs dismiss <id>
 //   node suggestions.mjs clear             removes dismissed notes
@@ -11,8 +13,26 @@ import { projectDir, scriptArgs, marginDir, readJson, writeJsonAtomic, keepAside
 
 const root = projectDir();
 const file = path.join(marginDir(root), 'suggestions.json');
-const [command = 'list', arg] = scriptArgs();
+const [command = 'list', ...rest] = scriptArgs();
+const arg = rest[0];
 const KINDS = ['citation', 'related', 'contradiction', 'todo', 'note'];
+
+// Notes given as flags need no JSON quoting, which Windows PowerShell 5.1 breaks
+// when it passes arguments to programs.
+function notesFromFlags(args) {
+  const notes = [];
+  const problems = [];
+  let current = null;
+  for (let k = 0; k < args.length; k++) {
+    const m = /^--(file|line|kind|message|source)(?:=([\s\S]*))?$/.exec(args[k]);
+    if (!m) { problems.push(`Unknown option "${args[k]}" (use --file, --line, --kind, --message, --source)`); continue; }
+    const value = m[2] !== undefined ? m[2] : args[++k];
+    if (value === undefined) { problems.push(`--${m[1]} needs a value`); continue; }
+    if (m[1] === 'file' || !current) { current = {}; notes.push(current); }
+    current[m[1]] = value;
+  }
+  return { notes, problems };
+}
 
 // A damaged notes file is never silently replaced: adding a note keeps it aside
 // first, and the other commands just say so.
@@ -30,7 +50,16 @@ const damaged = () => `Margin's notes file (.margin/suggestions.json) is damaged
 
 if (command === 'add') {
   let incoming;
-  try { incoming = JSON.parse(arg); } catch { console.log('Pass the note as JSON.'); process.exit(1); }
+  if (typeof arg === 'string' && arg.startsWith('--')) {
+    const { notes, problems } = notesFromFlags(rest);
+    if (problems.length) { for (const p of problems) console.log(`${p}.`); console.log('Nothing was queued.'); process.exit(1); }
+    incoming = notes;
+  } else {
+    try { incoming = JSON.parse(arg); } catch {
+      console.log('Pass the note as flags (add --file <path> --line <n> --kind <kind> --message <text>) or as JSON.');
+      process.exit(1);
+    }
+  }
   if (loaded.damaged) {
     const kept = keepAside(file);
     console.log(`${damaged()} It was kept as ${rel(root, kept)}, and a new list was started.`);

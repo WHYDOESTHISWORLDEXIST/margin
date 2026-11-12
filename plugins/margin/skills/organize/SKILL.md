@@ -2,7 +2,7 @@
 name: organize
 description: Tidy a writing project's files into a clear folder layout. Proposes a plan first, moves nothing without approval, never deletes, and can undo. Use when the writer runs /margin:organize or asks to clean up, sort or organize their files or notes.
 argument-hint: "[folder] | undo"
-allowed-tools: Bash(node *)
+allowed-tools: Bash(node *), PowerShell(node *)
 ---
 
 # Organize the project
