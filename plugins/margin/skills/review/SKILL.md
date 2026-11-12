@@ -18,9 +18,11 @@ Before `undo` or `dismiss`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mj
 
 With nothing typed, show both views:
 
-1. **Changes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" list`. Show them as a table with **#**, **When**, **Change**, **File** and **Can undo**.
+1. **Changes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/review.mjs" --project "${CLAUDE_PROJECT_DIR}" list`. Show them as a table with **#**, **When** (the writer's local time), **Change**, **File** and **Can undo**. **Change** is `created`, `edited`, `undone`, or `undid #…` for an undo. **Can undo** is `yes`, `no`, `no backup`, `with later changes`, or `backup cleared <date>`: old backups are cleared to save space (see below), and the change stays listed.
 2. **Margin notes:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" list`. Show them as a table with **Id**, **Kind**, **Where** and **Note**.
 
 Then one line on how to act: "Undo with `/margin:review undo 3`, dismiss a note with `/margin:review dismiss a1b2c3`."
 
-Undo restores the backup taken before that change. It first keeps the current version and lists the undo as a change of its own, so an undo can be undone too. It won't silently roll back later changes to the same file or edits made since; it explains and waits for a go-ahead. Files Claude created are moved to `.margin/trash`, never deleted.
+Only changes made with Claude's file tools (Edit, Write, MultiEdit, NotebookEdit) are listed and backed up. Changes made through shell commands (`sed -i`, redirects, `mv`) are not, so say so if the writer asks about one.
+
+Undo restores the backup taken before that change. If the result says the backup was cleared, tell the writer that change can't be undone here. It first keeps the current version and lists the undo as a change of its own, so an undo can be undone too. It won't silently roll back later changes to the same file or edits made since; it explains and waits for a go-ahead. Files Claude created are moved to `.margin/trash`, never deleted.

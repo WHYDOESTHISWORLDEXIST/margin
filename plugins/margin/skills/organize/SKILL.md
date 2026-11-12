@@ -15,11 +15,11 @@ If they typed `undo`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" --proje
 
 ## 1. Look
 
-Run the inventory. It lists files by kind, date and size, plus identical copies, without opening them:
+Run the inventory. It lists files by kind, date and size, plus identical copies of any size, and never shows file contents. It skips tool folders such as `.git`, `node_modules`, `.venv`, `dist` and `build`, and says in one line if it couldn't read something:
 
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/inventory.mjs" --project "${CLAUDE_PROJECT_DIR}" "<folder>"`
 
-Use the folder they named, in double quotes so a name with spaces stays one path; leave it out to look at the whole project.
+Use the folder they named, in double quotes so a name with spaces stays one path; leave it out to look at the whole project. A folder that doesn't exist, or that lies outside the project, is refused with a message; pass that on.
 
 Read the settings for the folder names the writer already chose:
 
@@ -39,7 +39,7 @@ Show the plan as a table with the columns **File**, **Moves to** and **Why**, gr
 - Move only files whose place is clearly wrong. Leave the rest alone.
 - Never rename a file's base name unless the writer asks.
 - For identical copies, propose moving the extras to `archive/duplicates/`. Never delete.
-- Leave hidden folders, config files and code alone.
+- Leave hidden folders, config files and code alone. The script also refuses to move `.git`, `.margin`, `node_modules` or the project folder itself.
 - If a file's purpose is unclear from its name, list it under "Not sure" and ask, rather than guessing.
 
 Then ask for approval with the AskUserQuestion tool: "Move all", "Let me pick" or "Not now".
@@ -50,4 +50,4 @@ Write the approved moves to `.margin/plan.json` as a JSON list of `{"from": "...
 
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/move.mjs" --project "${CLAUDE_PROJECT_DIR}" apply .margin/plan.json`
 
-The script refuses to overwrite anything and logs every batch. Report what moved, and tell the writer that `/margin:organize undo` puts the last batch back.
+The script refuses to overwrite anything and logs every move as it happens, so a failure halfway is still recorded. It names any step it skipped and why (for example, a file open in another program). Report what moved and what was skipped, and tell the writer that `/margin:organize undo` puts the last batch back. If undo says it couldn't put some files back, tell the writer what stood in the way; once that's sorted out, running `/margin:organize undo` again finishes the rest.

@@ -32,7 +32,7 @@ The writer typed: `$ARGUMENTS`
 
    A key with `form: "bare"` is an @name in running text, not in [brackets] or a `\cite`: it may be a mention, like an @handle, rather than a citation. List it separately as "possible mentions", and don't fix it or queue a note for it unless the writer says it's a citation.
 
-5. Offer to fix only the keys that have a single clear close match. Ask with the AskUserQuestion tool ("Fix these", "Let me pick", "Leave them"). After approval, make exact key replacements in the draft with the Edit tool. Every edit is backed up automatically and can be undone with `/margin:review`.
+5. Offer to fix only the keys that have a single clear close match. Ask with the AskUserQuestion tool ("Fix these", "Let me pick", "Leave them"). After approval, make exact key replacements in the draft with the Edit tool; Claude Code may ask the writer to allow each edit. Every edit is backed up automatically and can be undone with `/margin:review`. If Claude Code asks whether to go ahead because Margin couldn't back the file up first, say so plainly and let the writer decide.
 
 ## Never
 

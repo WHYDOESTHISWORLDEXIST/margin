@@ -7,7 +7,7 @@ allowed-tools: Bash(node *), PowerShell(node *), Glob
 
 # Focus: pick which files Claude may read
 
-While focus is on, hooks keep Claude's reading inside the picked list. Outside it, the Read and Grep tools are blocked, and so are shell commands that read files (`cat`, `head`, `sed`, `grep -r`, `rg`, `Get-Content`, `Select-String` and the like). When a command might read an outside file but Margin can't be sure (a one-line script or another program naming the file, a file name in a variable), the writer is asked first. File and folder names stay visible, and Margin can't see inside programs that open files on their own. Margin's own settings and lists in `.margin/` stay readable; its backups (`.margin/history/`, `.margin/trash/`) don't, since they hold copies of the writer's files.
+While focus is on, hooks keep Claude's reading inside the picked list. Outside it, the Read and Grep tools are blocked, and so are shell commands that read files (`cat`, `head`, `sed`, `grep -r`, `rg`, `Get-Content`, `Select-String` and the like). When a command might read an outside file but Margin can't be sure (a one-line script or another program naming the file, a file name in a variable), the writer is asked first. File and folder names stay visible, and Margin can't see inside programs that open files on their own. Margin's own settings and lists in `.margin/` stay readable; its backups (`.margin/history/`, `.margin/trash/`) don't, since they hold copies of the writer's files. Focus limits what Claude reads, not what it writes, and it doesn't cover shell programs that open files by themselves (a script, `git log -p`). A focus list that has been set is enforced even in a project where `/margin:setup` was never run.
 
 The writer typed: `$ARGUMENTS`
 
@@ -22,6 +22,8 @@ Run it with the command and paths they typed, each path in its own double quotes
 For example, `/margin:focus add old drafts/ch 1.md notes` becomes `add "old drafts/ch 1.md" "notes"` when those are the files that exist; check with Glob if you're unsure where one name ends.
 
 Commands: `status`, `add <path...>`, `remove <path...>`, `on`, `off`, `clear`. Adding the first path turns focus on automatically.
+
+Two messages need a word from you. If `add` says `Not found … Nothing was added`, tell the writer in one line which names weren't found; focus is unchanged. If any command begins by saying the focus list was damaged and repaired, keep that message: until the repair, Claude's reading was paused (never its edits), and a copy of the old list is kept in `.margin/`.
 
 ## If they gave nothing, or described it in words
 
