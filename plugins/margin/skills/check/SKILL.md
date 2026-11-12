@@ -38,6 +38,8 @@ Queue every finding at once, with the draft's line number. Each note starts with
 
 Put each value in straight double quotes. Inside a message, quote with ‘single curly quotes’ and write apostrophes as ’; never use double quotes of any kind (" “ ”), `$` or backticks, so the command works the same in every shell. Keep each message under about 25 words and factual. No praise, no ‘consider rewriting’.
 
+Running the check again is safe: a note that is already queued, or that the writer dismissed, is not added again. The command says how many were new ("3 new, 2 already queued or dismissed"); report only the new ones.
+
 ## 4. Report
 
 Reply with one line of counts (for example "2 possible contradictions, 3 citations to look at, 1 related passage"), then a short table of the findings: **Line**, **Kind**, **Note**. Mention that the VS Code companion shows these in the margin at the next pause, and that `/margin:review` lists them later.

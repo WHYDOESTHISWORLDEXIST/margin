@@ -9,13 +9,20 @@
 //   node suggestions.mjs clear             removes dismissed notes
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { projectDir, scriptArgs, marginDir, readJson, writeJsonAtomic, keepAside, isPlainObject, rel, onDiskSpelling } from './lib.mjs';
+import { projectDir, scriptArgs, marginDir, readJson, writeJsonAtomic, keepAside, isPlainObject, rel, onDiskSpelling, fileKey } from './lib.mjs';
 
 const root = projectDir();
 const file = path.join(marginDir(root), 'suggestions.json');
 const [command = 'list', ...rest] = scriptArgs();
 const arg = rest[0];
 const KINDS = ['citation', 'related', 'contradiction', 'todo', 'note'];
+
+// Two notes are the same note when they are about the same file, of the same
+// kind, and say the same thing (ignoring case, spacing and curly quotes). The
+// line doesn't count: it moves as the draft changes. A note that is already
+// queued, or that the writer already dismissed, is not added again.
+const normalizeMessage = (m) => String(m).replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase();
+const sameNoteKey = (file, kind, message) => `${fileKey(root, file)}|${kind}|${normalizeMessage(message)}`;
 
 // Notes given as flags need no JSON quoting, which Windows PowerShell 5.1 breaks
 // when it passes arguments to programs.
@@ -66,9 +73,12 @@ if (command === 'add') {
     data = { version: 1, items: [] };
   }
   const list = Array.isArray(incoming) ? incoming : [incoming];
+  const known = new Set(data.items.filter((i) => typeof i.file === 'string' && i.message !== undefined).map((i) => sameNoteKey(i.file, i.kind, i.message)));
+  let added = 0;
+  let already = 0;
   for (const n of list) {
     if (!isPlainObject(n) || !n.file || !n.message) { console.log('Each note needs "file" and "message".'); continue; }
-    data.items.push({
+    const item = {
       id: crypto.randomBytes(3).toString('hex'),
       file: onDiskSpelling(root, rel(root, String(n.file))), // as on disk, so the companion finds it
       line: Number(n.line) || 1,
@@ -77,10 +87,15 @@ if (command === 'add') {
       source: n.source ? String(n.source) : undefined,
       createdAt: new Date().toISOString(),
       status: 'open'
-    });
+    };
+    const key = sameNoteKey(item.file, item.kind, item.message);
+    if (known.has(key)) { already++; continue; }
+    known.add(key);
+    data.items.push(item);
+    added++;
   }
-  writeJsonAtomic(file, data);
-  console.log(`${list.length} note(s) queued. ${data.items.filter((i) => i.status === 'open').length} open in total.`);
+  if (added || loaded.damaged) writeJsonAtomic(file, data);
+  console.log(`${added} new, ${already} already queued or dismissed. ${data.items.filter((i) => i.status === 'open').length} open in total.`);
 } else if (command === 'list') {
   if (loaded.damaged) {
     console.log(`${damaged()} Its notes can't be listed. The next note added keeps the damaged file aside and starts a new list.`);

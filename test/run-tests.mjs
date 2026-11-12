@@ -1515,5 +1515,33 @@ test('a relative Grep path is resolved against the hook’s folder, not the proj
   assert(grep(path.join(dir, 'drafts'), '..').includes('"deny"'), 'the parent of the focused folder is the whole project');
 });
 
+// B-19: running /margin:check again must not repeat notes or revive dismissed ones.
+test('a note that is already queued or dismissed is not added again, and the counts say so (B-19)', () => {
+  const dir = project();
+  const note = { file: 'drafts/ch3.md', line: 1, kind: 'citation', message: '@morrow2015 isn’t in your library.' };
+  const first = run('suggestions.mjs', ['add', JSON.stringify([note, { ...note, kind: 'todo' }])], dir);
+  assert(first.out.startsWith('2 new, 0 already queued or dismissed. 2 open in total.'), first.out);
+  // Same file, kind and message, however it is spelled; the line may have moved.
+  const again = run('suggestions.mjs', ['add', JSON.stringify({ ...note, line: 9, message: '  @Morrow2015   isn\'t in your library. ' })], dir);
+  assert(again.out.startsWith('0 new, 1 already queued or dismissed. 2 open in total.'), again.out);
+  const items = () => JSON.parse(fs.readFileSync(marginPath(dir, 'suggestions.json'), 'utf8')).items;
+  assert(items().length === 2, `${items().length} items`);
+  // Dismissed notes stay dismissed.
+  run('suggestions.mjs', ['dismiss', items()[0].id], dir);
+  const third = run('suggestions.mjs', ['add', JSON.stringify(note)], dir);
+  assert(third.out.startsWith('0 new, 1 already queued or dismissed. 1 open in total.'), third.out);
+  assert(items().filter((i) => i.status === 'dismissed').length === 1 && items().length === 2, 'the dismissed note was not revived');
+  // A different message, or another file, is a new note; duplicates inside one command count once.
+  const mixed = run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--kind', 'citation', '--message', 'Something else.', '--file', 'notes/interviews.md', '--kind', 'citation', '--message', note.message, '--file', 'notes/interviews.md', '--kind', 'citation', '--message', note.message], dir);
+  assert(mixed.out.startsWith('2 new, 1 already queued or dismissed. 3 open in total.'), mixed.out);
+  // Nothing new: the file isn't rewritten.
+  const before = fs.statSync(marginPath(dir, 'suggestions.json')).mtimeMs;
+  run('suggestions.mjs', ['add', JSON.stringify(note)], dir);
+  assert(fs.statSync(marginPath(dir, 'suggestions.json')).mtimeMs === before, 'file left alone');
+  // Only notes that were really added are counted: an invalid one is neither.
+  const bad = run('suggestions.mjs', ['add', JSON.stringify([{ file: 'x.md' }, { file: 'drafts/ch3.md', message: 'fresh one' }])], dir);
+  assert(bad.out.includes('Each note needs') && bad.out.includes('1 new, 0 already queued or dismissed.'), bad.out);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
