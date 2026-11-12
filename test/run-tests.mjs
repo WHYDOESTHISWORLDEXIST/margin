@@ -1709,5 +1709,211 @@ await atest('companion: a notes file that can’t be read is left untouched by a
     assert(!fs.readdirSync(path.join(dir, '.margin')).some((n) => n.endsWith('.tmp')), 'no temp file left behind');
   }));
 
+// --- The shipped wiring (A-32): hooks.json and the skills, run the way Claude Code runs them ---
+// Every command string comes from hooks.json or a SKILL.md as shipped, with
+// ${CLAUDE_PLUGIN_ROOT} replaced by a copy of the plugin whose path has a space
+// in it, and goes through `sh -c` in a project whose path has a space in it.
+
+const hooksJson = JSON.parse(fs.readFileSync(path.join(scripts, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
+const KNOWN_TOOLS = ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell'];
+const WRITE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+const KNOWN_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'UserPromptSubmit'];
+
+let pluginCopy = null;
+function wiredPluginRoot() {
+  if (!pluginCopy) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'margin plugin copy '));
+    made.push(parent);
+    pluginCopy = path.join(parent, 'margin plugin');
+    fs.cpSync(path.join(scripts, '..'), pluginCopy, { recursive: true });
+  }
+  return fwdSlashes(pluginCopy);
+}
+
+const groupsFor = (event, tool) => (hooksJson[event] || []).filter((g) => g.matcher === undefined || new RegExp(`^(?:${g.matcher})$`).test(tool));
+
+function shellCommand(command, dir, input) {
+  const root = wiredPluginRoot();
+  const res = spawnSync('sh', ['-c', command.split('${CLAUDE_PLUGIN_ROOT}').join(root)], {
+    cwd: dir,
+    input: input === undefined ? '' : JSON.stringify(input),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_PLUGIN_ROOT: root },
+    encoding: 'utf8',
+    timeout: 20000
+  });
+  return { code: res.status, out: res.stdout, err: res.stderr, command };
+}
+
+// Runs every hook command hooks.json registers for this event and tool.
+function wired(dir, event, tool, toolInput = {}, id = 'toolu_wired') {
+  const runs = [];
+  for (const group of groupsFor(event, tool)) {
+    for (const h of group.hooks) {
+      runs.push(shellCommand(h.command, dir, { session_id: 's', cwd: dir, hook_event_name: event, tool_name: tool, tool_input: toolInput, tool_use_id: id, prompt: 'Hello' }));
+    }
+  }
+  return runs;
+}
+const wiredOk = (runs, label) => {
+  assert(runs.length > 0, `${label}: hooks.json registers nothing for it`);
+  for (const r of runs) assert(r.code === 0 && r.err === '', `${label}: exit ${r.code}, stderr ${JSON.stringify(r.err)} from ${r.command}`);
+};
+const wiredDecision = (runs) => runs.map((r) => (r.out.trim() ? JSON.parse(r.out).hookSpecificOutput.permissionDecision : 'allow')).find((d) => d !== 'allow') || 'allow';
+const pendingIds = (dir) => (fs.existsSync(marginPath(dir, 'history/pending')) ? fs.readdirSync(marginPath(dir, 'history/pending')) : []);
+
+test('hooks.json as shipped: every event works through sh, with spaces in the plugin and project paths (A-32)', () => {
+  const dir = project();
+  assert(dir.includes(' ') && wiredPluginRoot().includes(' '), 'both paths should contain a space');
+  setUp(dir);
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const file = path.join(dir, 'drafts', 'ch3.md');
+
+  const read = wired(dir, 'PreToolUse', 'Read', { file_path: path.join(dir, 'notes', 'private.md') });
+  wiredOk(read, 'Read');
+  assert(wiredDecision(read) === 'deny', `a Read outside the list should be denied: ${read.map((r) => r.out)}`);
+  assert(wiredDecision(wired(dir, 'PreToolUse', 'Read', { file_path: file })) === 'allow', 'a Read inside the list is allowed');
+  assert(wiredDecision(wired(dir, 'PreToolUse', 'Grep', { pattern: 'mill' })) === 'deny', 'a whole-project Grep is denied');
+  const bash = wired(dir, 'PreToolUse', 'Bash', { command: 'cat notes/private.md' });
+  wiredOk(bash, 'Bash');
+  assert(wiredDecision(bash) === 'deny', 'cat outside the list is denied');
+  assert(wiredDecision(wired(dir, 'PreToolUse', 'PowerShell', { command: 'Get-Content notes\\private.md' })) === 'deny', 'Get-Content outside the list is denied');
+
+  // An edit: backup before, log entry after.
+  wiredOk(wired(dir, 'PreToolUse', 'Edit', { file_path: file }, 'toolu_a'), 'Edit before');
+  assert(pendingIds(dir).includes('toolu_a.json') && backupFiles(dir).length === 1, 'the backup and its pending record should exist');
+  fs.writeFileSync(file, 'changed\n');
+  wiredOk(wired(dir, 'PostToolUse', 'Edit', { file_path: file }, 'toolu_a'), 'Edit after');
+  const log = logEntries(dir);
+  assert(log.length === 1 && log[0].file === 'drafts/ch3.md' && log[0].snapshot, JSON.stringify(log));
+  assert(!pendingIds(dir).length, 'the pending record should be gone');
+
+  // A failed and a refused edit leave nothing behind.
+  for (const event of ['PostToolUseFailure', 'PermissionDenied']) {
+    const id = `toolu_${event}`;
+    wiredOk(wired(dir, 'PreToolUse', 'Edit', { file_path: file }, id), `${event}: before`);
+    wiredOk(wired(dir, event, 'Edit', { file_path: file }, id), event);
+    assert(!pendingIds(dir).length && backupFiles(dir).length === 1 && logEntries(dir).length === 1, `${event}: backups ${backupFiles(dir).length}, log ${logEntries(dir).length}`);
+  }
+
+  const prompt = wired(dir, 'UserPromptSubmit', undefined);
+  wiredOk(prompt, 'UserPromptSubmit');
+  assert(JSON.parse(prompt[0].out).hookSpecificOutput.additionalContext.includes('drafts'), prompt[0].out);
+});
+
+test('hooks.json lint: events and matchers name known tools, and each event’s script handles every one of them (A-32)', () => {
+  for (const event of Object.keys(hooksJson)) assert(KNOWN_EVENTS.includes(event), `unknown hook event ${event}`);
+  const scriptOf = (h) => /^node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([\w-]+\.mjs)"$/.exec(h.command);
+  for (const [event, groups] of Object.entries(hooksJson)) {
+    for (const group of groups) {
+      if (group.matcher !== undefined) {
+        const names = group.matcher.split('|');
+        assert(new Set(names).size === names.length, `${event}: duplicate tool in ${group.matcher}`);
+        for (const n of names) assert(KNOWN_TOOLS.includes(n), `${event}: matcher names an unknown tool ${n}`);
+      }
+      assert(group.hooks.length > 0, `${event}: a group with no hooks`);
+      for (const h of group.hooks) {
+        const m = scriptOf(h);
+        assert(h.type === 'command' && m, `${event}: command should be node "\${CLAUDE_PLUGIN_ROOT}/scripts/<name>.mjs": ${h.command}`);
+        assert(fs.existsSync(path.join(scripts, m[1])), `${event}: ${m[1]} doesn't exist`);
+        assert(Number.isFinite(h.timeout) && h.timeout > 0 && h.timeout <= 30, `${event}: ${m[1]} needs a sensible timeout`);
+      }
+    }
+  }
+  // The tools Margin backs up before an edit are the tools it logs after one.
+  const toolsOf = (event) => new Set((hooksJson[event] || []).flatMap((g) => (g.matcher || '').split('|')));
+  const backedUp = [...toolsOf('PreToolUse')].filter((t) => WRITE_TOOLS.includes(t)).sort().join();
+  for (const event of ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied']) {
+    assert([...toolsOf(event)].sort().join() === backedUp, `${event} should cover ${backedUp}, covers ${[...toolsOf(event)].sort()}`);
+  }
+
+  // Each script, run as registered, does the right thing for every tool its matcher names.
+  const dir = project();
+  setUp(dir);
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const file = path.join(dir, 'drafts', 'ch3.md');
+  const inputFor = (tool) => (tool === 'NotebookEdit' ? { notebook_path: file } : { file_path: file });
+  let n = 0;
+  for (const [event, groups] of Object.entries(hooksJson)) {
+    for (const group of groups) {
+      for (const tool of group.matcher === undefined ? [undefined] : group.matcher.split('|')) {
+        const label = `${event}/${tool}`;
+        const id = `toolu_lint${n++}`;
+        for (const h of group.hooks) {
+          const script = scriptOf(h)[1];
+          if (event === 'PreToolUse' && script === 'guard.mjs') {
+            if (tool === 'Read') assert(wiredDecision(wired(dir, event, tool, { file_path: path.join(dir, 'notes', 'private.md') })) === 'deny', `${label} should deny a read outside the list`);
+            else if (tool === 'Grep') assert(wiredDecision(wired(dir, event, tool, { pattern: 'x' })) === 'deny', `${label} should deny a whole-project search`);
+            else {
+              assert(WRITE_TOOLS.includes(tool), `${label}: guard.mjs has no test for this tool`);
+              wiredOk(wired(dir, event, tool, inputFor(tool), id), label);
+              assert(pendingIds(dir).includes(`${id}.json`), `${label} should record a backup before the change`);
+              wiredOk(wired(dir, 'PostToolUse', tool, inputFor(tool), id), `PostToolUse/${tool}`);
+              assert(logEntries(dir).pop().tool === tool, `PostToolUse/${tool} should log the change as ${tool}`);
+            }
+          } else if (event === 'PreToolUse' && script === 'shell-guard.mjs') {
+            const command = tool === 'PowerShell' ? 'Get-Content notes\\private.md' : 'cat notes/private.md';
+            assert(wiredDecision(wired(dir, event, tool, { command })) === 'deny', `${label} should deny a read outside the list`);
+          } else if (script === 'log-change.mjs' && event !== 'PostToolUse') {
+            assert(WRITE_TOOLS.includes(tool), `${label}: log-change.mjs has no test for this tool`);
+            wired(dir, 'PreToolUse', tool, inputFor(tool), id);
+            assert(pendingIds(dir).includes(`${id}.json`), `${label}: setup should leave a pending record`);
+            const before = logEntries(dir).length;
+            wiredOk(wired(dir, event, tool, inputFor(tool), id), label);
+            assert(!pendingIds(dir).includes(`${id}.json`) && logEntries(dir).length === before, `${label} should clear the pending record without logging`);
+          } else if (script === 'log-change.mjs') {
+            assert(WRITE_TOOLS.includes(tool), `${label}: log-change.mjs has no test for this tool`); // behavior checked with guard.mjs above
+          } else if (event === 'UserPromptSubmit' && script === 'focus-context.mjs') {
+            assert(tool === undefined, 'focus-context.mjs should run on every prompt');
+            wiredOk(wired(dir, event, undefined), label);
+          } else {
+            assert(false, `${label}: no test for ${script}; add one to this lint`);
+          }
+        }
+      }
+    }
+  }
+});
+
+test('skills lint: frontmatter parses, scripts exist, and every script command passes the project folder (A-32)', () => {
+  const skillsDir = path.join(scripts, '..', 'skills');
+  const names = fs.readdirSync(skillsDir).sort();
+  assert(names.length >= 7, `expected the seven skills, found ${names}`);
+  const readme = fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8');
+  const listed = [...readme.matchAll(/\|\s*`\/margin:(\w+)/g)].map((m) => m[1]).sort();
+  assert(listed.join() === names.join(), `README commands ${listed} vs skills ${names}`);
+  const runnable = new Set();
+  for (const name of names) {
+    const text = fs.readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf8');
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text);
+    assert(fm, `${name}: no frontmatter`);
+    const meta = {};
+    for (const line of fm[1].split(/\r?\n/)) {
+      const m = /^([\w-]+):\s*(.*)$/.exec(line);
+      assert(m, `${name}: frontmatter line doesn't parse: ${line}`);
+      meta[m[1]] = m[2];
+    }
+    assert(meta.name === name, `${name}: name is ${meta.name}`);
+    assert(meta.description && meta.description.length > 40, `${name}: description is missing or too short`);
+    assert(meta['allowed-tools'], `${name}: allowed-tools is missing`);
+    assert(!('disable-model-invocation' in meta) || meta['disable-model-invocation'] === 'true', `${name}: disable-model-invocation should be true or absent`);
+    for (const key of Object.keys(meta)) assert(['name', 'description', 'argument-hint', 'allowed-tools', 'disable-model-invocation'].includes(key), `${name}: unexpected frontmatter key ${key}`);
+    if (meta['argument-hint']) assert(/^".*"$/.test(meta['argument-hint']), `${name}: quote the argument-hint`);
+    for (const m of text.matchAll(/scripts\/([\w-]+\.mjs)/g)) assert(fs.existsSync(path.join(scripts, m[1])), `${name}: refers to a script that doesn't exist: ${m[1]}`);
+    const commands = [...text.matchAll(/node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([\w-]+\.mjs)"([^`\n]*)/g)];
+    if (commands.length) assert(meta['allowed-tools'].includes('Bash(node *)') && meta['allowed-tools'].includes('PowerShell(node *)'), `${name}: allow node in both shells`);
+    for (const m of commands) {
+      assert(m[2].startsWith(' --project "${CLAUDE_PROJECT_DIR}"'), `${name}: ${m[0]}`);
+      if (!/[<$]/.test(m[2].slice(' --project "${CLAUDE_PROJECT_DIR}"'.length)) && /\s(show|init|ensure|status|list|undo)\s*$/.test(m[2])) runnable.add(m[0]);
+    }
+  }
+  // The commands that need no input run as written.
+  assert(runnable.size >= 6, `expected several argument-less commands, found ${[...runnable]}`);
+  const dir = project();
+  for (const command of runnable) {
+    const r = shellCommand(command, dir); // sh expands ${CLAUDE_PROJECT_DIR} from the environment
+    assert(r.code === 0 && r.err === '', `${command}: exit ${r.code} ${r.err}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
