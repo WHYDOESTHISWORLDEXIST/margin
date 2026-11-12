@@ -1017,6 +1017,22 @@ test('focus on: the shell check stays fast', () => {
   assert(thousand < 2000 && longMs < 50, `1,000 checks took ${thousand.toFixed(0)} ms, a 200-part command ${longMs.toFixed(1)} ms`);
 });
 
+// A2-05: PowerShell takes \ between folders on every system; Node's path module only on
+// Windows. Elsewhere the PowerShell words get / first, so the table above holds there too.
+test('PowerShell paths written with \\ are paths on macOS and Linux too (A2-05)', () => {
+  assert(shellCheck.psSeparators('notes\\private.md', 'linux') === 'notes/private.md', 'linux');
+  assert(shellCheck.psSeparators('.\\notes\\private.md', 'darwin') === './notes/private.md', 'darwin');
+  assert(shellCheck.psSeparators('notes\\private.md', 'win32') === 'notes\\private.md', 'Windows keeps \\');
+  // The tokenizer applies it: a run that reports a POSIX platform sees / in a PowerShell word.
+  const dir = project();
+  const preload = path.join(dir, 'as-linux.cjs');
+  fs.writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'linux' });\n");
+  const sc = pathToFileURL(path.join(scripts, 'shell-check.mjs')).href;
+  const code = `const s = await import(${JSON.stringify(sc)}); const r = s.classify('Get-Content $x\\\\notes\\\\private.md', { dialect: 'powershell', cwd: ${JSON.stringify(dir)} }); console.log(r.unknown[0].word);`;
+  const res = spawnSync(process.execPath, ['-r', preload, '--input-type=module', '-e', code], { cwd: dir, encoding: 'utf8' });
+  assert(res.stdout.trim() === '/notes/private.md', `expected "/notes/private.md": ${res.stdout}${res.stderr}`);
+});
+
 function shellHook(dir, tool, command, extraEnv = {}) {
   return run('shell-guard.mjs', [], dir, { cwd: dir, hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command }, tool_use_id: 'toolu_sh' }, extraEnv);
 }

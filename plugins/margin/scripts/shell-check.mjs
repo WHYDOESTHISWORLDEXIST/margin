@@ -24,6 +24,12 @@ const DOTNET_READERS = /^(system\.)?io\.(file|filestream|fileinfo|streamreader|b
 const SCOPE_OPEN = { scope: 'open' };
 const SCOPE_CLOSE = { scope: 'close' };
 
+// PowerShell takes \ as well as / between folders on every system, but Node's path
+// module only knows \ on Windows; elsewhere, PowerShell words get / instead.
+export function psSeparators(text, platform = process.platform) {
+  return platform === 'win32' ? text : text.replace(/\\/g, '/');
+}
+
 // --------------------------------------------------------------------------
 // Programs
 // --------------------------------------------------------------------------
@@ -124,6 +130,7 @@ function tokenize(src, dialect, vars, depth) {
     if (!word) return;
     const w = word;
     word = null;
+    if (ps) w.text = psSeparators(w.text);
     if (pending) {
       const r = pending;
       pending = null;
@@ -275,7 +282,7 @@ function tokenize(src, dialect, vars, depth) {
         endCommand(false); i++; continue;
       }
       if (c === '(' && (word || cmd.words.length)) { // (subexpression) as an argument: its value is only known when it runs
-        endWord(); startWord(); const end = findClose(i, '(', ')'); word.inner = src.slice(i + 1, end); nested(word.inner); word.dynamic = true; i = end + 1; continue;
+        endWord(); startWord(); const end = findClose(i, '(', ')'); word.inner = psSeparators(src.slice(i + 1, end)); nested(word.inner); word.dynamic = true; i = end + 1; continue;
       }
       if (c === ';' || c === '{' || c === '}' || c === '(' || c === ')') { endCommand(false); i++; continue; }
       if (c === ',') { endWord(); i++; continue; }
