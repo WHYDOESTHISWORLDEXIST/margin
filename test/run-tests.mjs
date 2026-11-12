@@ -1112,6 +1112,35 @@ test('the cite and check skills handle library errors and bare @mentions', () =>
   for (const word of ['error', 'form: "bare"']) assert(read('check').includes(word), `check: ${word}`);
 });
 
+// --- Organize's inventory reads only what can be a duplicate (A-29/B-29, K6) ---
+
+const inventory = await import(pathToFileURL(path.join(scripts, 'inventory.mjs')).href);
+
+test('inventory reads only files that share a size with another file, and finds the identical ones', () => {
+  const dir = project();
+  const make = (name, size, seed) => {
+    const buf = Buffer.alloc(size);
+    for (let i = 0; i < size; i++) buf[i] = (i * 31 + seed * 7) % 251;
+    fs.writeFileSync(path.join(dir, name), buf);
+    return { full: path.join(dir, name), bytes: size, path: name };
+  };
+  const unique = Array.from({ length: 10 }, (_, i) => make(`unique-${i}.pdf`, 100000 + i * 997, i));
+  const same1 = make('scan.pdf', 300000, 1);
+  const same2 = make('scan copy.pdf', 300000, 1);
+  const tailA = make('tail-a.pdf', 200000, 2);
+  const tailB = make('tail-b.pdf', 200000, 2);
+  const t = fs.readFileSync(tailB.full); t[199999] ^= 0xff; fs.writeFileSync(tailB.full, t);   // same size and start, different end
+  const headA = make('head-a.pdf', 150000, 3);
+  const headB = make('head-b.pdf', 150000, 4);
+  const files = [...unique, same1, same2, tailA, tailB, headA, headB];
+  const readBytes = new Map();
+  const groups = inventory.findDuplicates(files, { onRead: (n, file) => readBytes.set(file, (readBytes.get(file) || 0) + n) });
+  assert(groups.length === 1 && groups[0].map((f) => f.path).join() === 'scan.pdf,scan copy.pdf', JSON.stringify(groups.map((g) => g.map((f) => f.path))));
+  assert(unique.every((f) => !readBytes.has(f.full)), 'files of a unique size must not be read');
+  assert(readBytes.get(headA.full) === 65536 && readBytes.get(headB.full) === 65536, 'different starts: only the first 64 KB is read');
+  assert(readBytes.get(tailA.full) === 65536 + 200000 && readBytes.get(same1.full) === 65536 + 300000, 'same start: the whole file is compared');
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });
