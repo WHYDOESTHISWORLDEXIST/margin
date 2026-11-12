@@ -201,13 +201,54 @@ export function findCitations(text, kind = 'markdown') {
   return found.sort((a, b) => a.line - b.line);
 }
 
-function distance(a, b) {
-  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
-  for (let j = 1; j <= b.length; j++) d[0][j] = j;
-  for (let i = 1; i <= a.length; i++)
-    for (let j = 1; j <= b.length; j++)
-      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-  return d[a.length][b.length];
+const CLOSE_DISTANCE = 3;
+
+// The edit distance between a and b if it is at most `max`, else max + 1. Only a
+// band of width 2*max+1 around the diagonal is computed, and it stops as soon as
+// every cell in a row is above max.
+export function boundedDistance(a, b, max = CLOSE_DISTANCE) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Array(b.length + 1).fill(max + 1);
+    if (i <= max) cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = Math.max(1, i - max); j <= Math.min(b.length, i + max); j++) {
+      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      cur[j] = Math.min(v, max + 1);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return Math.min(prev[b.length], max + 1);
+}
+
+// Returns a function: typed key -> up to three library keys the writer may have meant: within 3 edits (ignoring
+// case), or starting with what was typed; nearest first, ties in library order.
+// A key that starts with what was typed is exactly (its length - the typed
+// length) edits away, so that case needs no calculation. Answers are remembered
+// per distinct key, since the same typo is usually cited many times.
+export function closeKeyFinder(keys) {
+  const lower = keys.map((k) => k.toLowerCase());
+  const memo = new Map();
+  const find = (wanted) => {
+    const a = wanted.toLowerCase();
+    if (memo.has(a)) return memo.get(a);
+    const near = [];
+    for (let i = 0; i < keys.length; i++) {
+      const b = lower[i];
+      let d;
+      if (b.startsWith(a)) d = b.length - a.length;
+      else if (Math.abs(a.length - b.length) > CLOSE_DISTANCE) continue;
+      else { d = boundedDistance(a, b); if (d > CLOSE_DISTANCE) continue; }
+      near.push({ k: keys[i], d });
+    }
+    const answer = near.sort((x, y) => x.d - y.d).slice(0, 3).map((x) => x.k);
+    memo.set(a, answer);
+    return answer;
+  };
+  return find;
 }
 
 // --------------------------------------------------------------------------
@@ -270,15 +311,10 @@ function main() {
   const unresolved = [];
   let resolved = 0;
   if (!report.error) {
-    const keys = [...library.keys()];
+    const findClose = closeKeyFinder([...library.keys()]);
     for (const c of citations) {
       if (library.has(c.key)) { resolved++; continue; }
-      const close = keys
-        .map((k) => ({ k, d: distance(c.key.toLowerCase(), k.toLowerCase()) }))
-        .filter((x) => x.d <= 3 || x.k.toLowerCase().startsWith(c.key.toLowerCase()))
-        .sort((a, b) => a.d - b.d)
-        .slice(0, 3)
-        .map((x) => x.k);
+      const close = findClose(c.key);
       unresolved.push({
         ...c,
         closeMatches: close,

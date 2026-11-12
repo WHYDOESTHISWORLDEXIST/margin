@@ -1586,5 +1586,73 @@ test('inventory: a file that can’t be read is reported in one line and the res
   }
 });
 
+// B-30: close matches are found faster, with exactly the same answers.
+// The reference below is the original method: the full edit distance to every key.
+function referenceClose(key, keys) {
+  const dist = (a, b) => {
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    return d[a.length][b.length];
+  };
+  return keys.map((k) => ({ k, d: dist(key.toLowerCase(), k.toLowerCase()) }))
+    .filter((x) => x.d <= 3 || x.k.toLowerCase().startsWith(key.toLowerCase()))
+    .sort((a, b) => a.d - b.d).slice(0, 3).map((x) => x.k);
+}
+function seededRandom(seed) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
+function randomKeys(n, rand) {
+  const parts = ['smith', 'jones', 'hale', 'morrow', 'okafor', 'lee', 'chen', 'garcia', 'muller', 'tide', 'mill', 'estuary'];
+  const keys = new Set();
+  while (keys.size < n) keys.add(parts[Math.floor(rand() * parts.length)] + (1990 + Math.floor(rand() * 35)) + (rand() < 0.4 ? ':' + parts[Math.floor(rand() * parts.length)] : '') + (rand() < 0.2 ? String.fromCharCode(97 + Math.floor(rand() * 26)) : ''));
+  return [...keys];
+}
+function typo(key, rand) {
+  const k = [...key];
+  const edits = Math.floor(rand() * 5);
+  for (let i = 0; i < edits; i++) {
+    const at = Math.floor(rand() * k.length);
+    const roll = rand();
+    if (roll < 0.34) k.splice(at, 1); else if (roll < 0.67) k.splice(at, 0, 'x'); else k[at] = 'q';
+  }
+  return rand() < 0.2 ? k.join('').toUpperCase() : k.join('');
+}
+
+test('close matches are exactly what the full edit distance gives, for typos, prefixes, case and unrelated keys (B-30)', () => {
+  const rand = seededRandom(7);
+  const keys = randomKeys(300, rand);
+  const find = citeCheck.closeKeyFinder(keys);
+  const wanted = [];
+  for (let i = 0; i < 400; i++) wanted.push(typo(keys[Math.floor(rand() * keys.length)], rand));
+  wanted.push('smith', 'sm', 'zzzzzzzz', 'Smith1990', 'a', 'estuary20');   // prefixes, short, unrelated, other case
+  for (const w of wanted) {
+    if (keys.includes(w)) continue;
+    assert(JSON.stringify(find(w)) === JSON.stringify(referenceClose(w, keys)), `${w}: ${find(w)} vs ${referenceClose(w, keys)}`);
+  }
+  assert(citeCheck.boundedDistance('kitten', 'sitten') === 1 && citeCheck.boundedDistance('abcdef', 'uvwxyz') === 4, 'bounded distance caps at max + 1');
+});
+
+test('close matches for a big library with repeated typos are much faster than the full distance (B-30)', () => {
+  const rand = seededRandom(11);
+  const keys = randomKeys(1500, rand);
+  const typos = Array.from({ length: 40 }, () => typo(keys[Math.floor(rand() * keys.length)], rand) + 'zz');
+  const occurrences = typos.flatMap((w) => [w, w, w]);   // each typo cited three times
+  let t0 = process.hrtime.bigint();
+  const find = citeCheck.closeKeyFinder(keys);
+  const fast = occurrences.map((w) => find(w));
+  const fastMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  t0 = process.hrtime.bigint();
+  const slow = occurrences.map((w) => referenceClose(w, keys));
+  const slowMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert(JSON.stringify(fast) === JSON.stringify(slow), 'same answers');
+  // Measured against the old method on this very machine, so a slow machine doesn't fail it.
+  assert(fastMs * 4 < slowMs, `new ${fastMs.toFixed(0)} ms vs old ${slowMs.toFixed(0)} ms`);
+});
+
+test('cite-check output is unchanged for the sample draft: close matches and their details (B-30)', () => {
+  const dir = project();
+  const report = JSON.parse(run('cite-check.mjs', ['drafts/ch3.md'], dir).out);
+  assert(report.unresolved.length === 1 && report.unresolved[0].key === 'smtih2020' && report.unresolved[0].closeMatches.join() === 'smith2020' && report.unresolved[0].closeMatchDetails[0].title === 'Tide Mills', JSON.stringify(report.unresolved));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
