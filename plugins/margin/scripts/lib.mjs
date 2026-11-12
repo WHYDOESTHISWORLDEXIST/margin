@@ -535,13 +535,32 @@ export function copyFileAtomic(src, dest) {
   }
 }
 
-// Where a new backup copy of a project file goes. Which file a backup belongs to
-// is recorded in the log and the pending records; never work it out from the name.
+// A file name that is valid on every system: no characters Windows refuses, no
+// trailing dots or spaces, and short enough that the whole name stays well under
+// the 255-character limit (the extension is kept).
+export function safeFileName(name, max = 80) {
+  let s = String(name).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '');
+  if (!s) s = 'file';
+  if (s.length > max) {
+    const ext = (path.extname(s).match(/^\.[A-Za-z0-9_-]{1,12}$/) || [''])[0];
+    s = s.slice(0, max - ext.length) + ext;
+  }
+  return s;
+}
+
+// Where a new backup copy of a project file goes: <stamp>__<n>__<file name>. The
+// name only has to be valid and unique: which file a backup belongs to, and where
+// it lives, is recorded in the log and the pending records, so nothing ever works
+// it out from the name (older backups named <stamp>__<folder>__<file> still work).
 export function newSnapshot(root, relFile) {
   const dir = path.join(marginDir(root), 'history');
-  const base = `${stamp()}__${relFile.replace(/[\\/]/g, '__')}`;
-  let abs = path.join(dir, base);
-  for (let i = 2; fs.existsSync(abs); i++) abs = path.join(dir, `${base}-${i}`);
+  const at = stamp();
+  const name = safeFileName(String(relFile).split(/[\\/]/).pop());
+  let abs;
+  for (let n = 1; ; n++) {
+    abs = path.join(dir, `${at}__${n}__${name}`);
+    if (!fs.existsSync(abs)) break;
+  }
   return { abs, rel: rel(root, abs) };
 }
 

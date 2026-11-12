@@ -1459,5 +1459,48 @@ test('Edit, Write and NotebookEdit into .margin are denied, except the organize 
   assert(run('focus.mjs', ['off'], dir).code === 0 && JSON.parse(fs.readFileSync(marginPath(dir, 'focus.json'), 'utf8')).enabled === false, 'Margin\u2019s own script still writes it');
 });
 
+// B-12: backup names are always valid, and a backup that fails is never silent.
+test('backup names stay valid for another drive, odd characters and long names, and still end in the file name (B-12)', () => {
+  const root = path.join(os.tmpdir(), 'margin test root');
+  const cases = ['D:/writing/ch1.md', 'drafts/a:b?c*d"e<f>g|h.md', `drafts/${'x'.repeat(240)}.markdown`, '../outside/n.md', 'drafts/ends with dots...', 'drafts/' + '\u00e9\u00e8'.repeat(70) + '.md'];
+  for (const c of cases) {
+    const s = marginLib.newSnapshot(root, c);
+    const name = path.basename(s.abs);
+    assert(!/[<>:"/\\|?*\u0000-\u001f]/.test(name) && !/[. ]$/.test(name) && name.length <= 120, `${c} -> ${name}`);
+  }
+  assert(path.basename(marginLib.newSnapshot(root, `drafts/${'x'.repeat(240)}.markdown`).abs).endsWith('.markdown'), 'extension kept');
+  // Two backups in the same millisecond never share a name.
+  const dir = project();
+  setUp(dir);
+  const a = marginLib.newSnapshot(dir, 'drafts/ch3.md');
+  fs.mkdirSync(path.dirname(a.abs), { recursive: true });
+  fs.writeFileSync(a.abs, 'x');
+  const b = marginLib.newSnapshot(dir, 'drafts/ch3.md');
+  assert(a.abs !== b.abs, 'second name differs');
+});
+
+test('a backup with an odd name can be restored by undo, and an old-style backup name still works (B-12)', () => {
+  const dir = project();
+  setUp(dir);
+  const odd = path.join(dir, 'drafts', 'odd: name?.md');
+  const target = fs.existsSync(odd) ? odd : path.join(dir, 'drafts', 'odd name.md');
+  fs.writeFileSync(target, 'before\n');
+  hook(dir, 'Edit', { file_path: target }, 'toolu_odd');
+  fs.writeFileSync(target, 'after\n');
+  run('log-change.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: target }, tool_use_id: 'toolu_odd' });
+  assert(run('review.mjs', ['undo', '1'], dir).code === 0 && fs.readFileSync(target, 'utf8') === 'before\n', 'undo restores');
+});
+
+test('if a backup can\u2019t be made the guard asks instead of crashing or staying silent (B-12)', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts', 'ch3.md');
+  const res = run('guard.mjs', [], dir, { cwd: dir, tool_name: 'Edit', tool_input: { file_path: file }, tool_use_id: 'toolu_fail', hook_event_name: 'PreToolUse' }, { MARGIN_TEST_FAIL: 'backup' });
+  const out = JSON.parse(res.out).hookSpecificOutput;
+  assert(res.code === 0 && out.permissionDecision === 'ask' && /back up drafts\/ch3\.md/.test(out.permissionDecisionReason) && /Allow it anyway/.test(out.permissionDecisionReason), res.out);
+  assert(!fs.existsSync(marginPath(dir, 'history/pending/toolu_fail.json')), 'no pending record for a change that wasn\u2019t backed up');
+  assert(fs.existsSync(marginPath(dir, 'errors.jsonl')), 'the failure is recorded');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

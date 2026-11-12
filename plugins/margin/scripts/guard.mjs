@@ -60,6 +60,15 @@ function protectMargin() {
   deny("Margin's own files are changed with its commands (/margin:focus, /margin:review, /margin:setup), not edited directly. Ask the writer to run the command.");
 }
 
+// A backup that can't be made must not pass silently: the change could not be
+// undone. Hand the decision to the writer through Claude Code's own prompt.
+function ask(reason) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason }
+  }));
+  process.exit(0);
+}
+
 function backUp() {
   if (!setUp || !EDIT_TOOLS.includes(tool)) return;
   const file = args.file_path || args.notebook_path;
@@ -70,8 +79,15 @@ function backUp() {
   let snapshot = null;
   if (fs.existsSync(target) && fs.statSync(target).isFile()) {
     snapshot = newSnapshot(root, rel(root, target));
-    fs.mkdirSync(historyDir, { recursive: true });
-    fs.copyFileSync(target, snapshot.abs);
+    try {
+      if (process.env.MARGIN_TEST_FAIL === 'backup') throw new Error('simulated failure (test only)');
+      fs.mkdirSync(historyDir, { recursive: true });
+      fs.copyFileSync(target, snapshot.abs);
+    } catch (err) {
+      try { fs.rmSync(snapshot.abs, { force: true }); } catch { /* nothing to clean */ }
+      try { appendLine(path.join(marginDir(root), 'errors.jsonl'), { time: new Date().toISOString(), hook: 'guard', tool, error: 'backup failed: ' + String(err && err.message) }); } catch { /* nothing more to do */ }
+      ask(`Margin couldn't back up ${rel(root, target)} first, so this change couldn't be undone with /margin:review. Allow it anyway?`);
+    }
   }
   writeJson(path.join(historyDir, 'pending', `${input.tool_use_id}.json`), {
     file: rel(root, target),
