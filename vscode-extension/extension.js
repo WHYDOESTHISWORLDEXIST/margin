@@ -6,7 +6,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { PauseTracker, endsParagraph } = require('./pause');
+const { PauseTracker, BreakOffer, endsParagraph } = require('./pause');
 
 const KIND_STYLE = {
   citation: { icon: 'dot-citation.svg', ruler: '#2F6A8A', label: 'Citation' },
@@ -15,7 +15,6 @@ const KIND_STYLE = {
   todo: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Loose end' },
   note: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Note' }
 };
-const BREAK_SNOOZE_MS = 20 * 60 * 1000;
 const kindOf = (n) => (Object.prototype.hasOwnProperty.call(KIND_STYLE, n.kind) ? n.kind : 'note');
 
 function activate(context) {
@@ -24,10 +23,10 @@ function activate(context) {
     pauseMs: config().get('pauseSeconds') * 1000,
     stuckMs: config().get('stuckMinutes') * 60 * 1000
   });
+  const offer = new BreakOffer();
   const revealed = new Set();
   let notes = [];
   let windowFocused = vscode.window.state.focused;
-  let snoozedUntil = 0;
   let walkReturn = null;
 
   const decorations = {};
@@ -131,10 +130,9 @@ function activate(context) {
   function refresh() {
     const shown = notes.filter((n) => revealed.has(n.id)).length;
     const held = notes.length - shown;
-    const offerBreak =
-      config().get('suggestBreaks') && windowFocused && Date.now() > snoozedUntil && tracker.isStalled() &&
-      vscode.window.activeTextEditor && watched(vscode.window.activeTextEditor.document);
-    if (offerBreak) {
+    const editor = vscode.window.activeTextEditor;
+    const stalled = Boolean(config().get('suggestBreaks') && editor && watched(editor.document) && tracker.isStalled());
+    if (offer.update(stalled, windowFocused)) {
       setStatus({
         text: '$(coffee) Margin · break?',
         tooltip: 'A short break is here if you want one. Click to choose, or just ignore this.',
@@ -169,6 +167,7 @@ function activate(context) {
       if (endsParagraph(prevLine, change.text)) finished = true;
     }
     tracker.recordEdit(inserted, deleted, finished);
+    offer.typed();
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
@@ -214,7 +213,7 @@ function activate(context) {
   }
 
   context.subscriptions.push(vscode.commands.registerCommand('margin.breakMenu', async () => {
-    snoozedUntil = Date.now() + BREAK_SNOOZE_MS;
+    offer.clicked();
     refresh();
     const choice = await vscode.window.showQuickPick([
       { label: '$(book) A very short story', description: 'about a minute', id: 'story' },

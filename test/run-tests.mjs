@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const scripts = path.join(here, '..', 'plugins', 'margin', 'scripts');
 const require = createRequire(import.meta.url);
-const { PauseTracker, endsParagraph } = require('../vscode-extension/pause.js');
+const { PauseTracker, BreakOffer, endsParagraph } = require('../vscode-extension/pause.js');
 
 let passed = 0;
 let failed = 0;
@@ -1164,6 +1164,49 @@ test('pause tracker: mostly deleting for minutes reads as stalled; reading does 
   assert(tracker.isStalled(), 'write-delete churn should read as stalled');
 });
 
+// K4: the break offer backs off by itself once it has been seen (A-15/B-14).
+// Each call runs the offer second by second and returns a string with one
+// letter per second: B shown, . hidden.
+function offerTimeline(offer, clock, seconds, { wanted = true, focused = true, typeAt = [], clickAt = [] } = {}) {
+  let out = '';
+  for (let s = 0; s < seconds; s++) {
+    clock.t += 1000;
+    if (typeAt.includes(s)) offer.typed();
+    if (clickAt.includes(s)) offer.clicked();
+    out += offer.update(typeof wanted === 'function' ? wanted(s) : wanted, focused) ? 'B' : '.';
+  }
+  return out;
+}
+const runs = (line) => line.match(/B+|\.+/g).map((r) => `${r[0]}${r.length}`).join(' ');
+
+test('break offer: shown while stalled, hides after 2 minutes unclicked, stays away 20 minutes, then returns', () => {
+  const clock = { t: 0 };
+  const offer = new BreakOffer({ now: () => clock.t });
+  const line = runs(offerTimeline(offer, clock, 22 * 60 + 30));
+  assert(line === 'B120 .1200 B30', line);
+});
+
+test('break offer: typing hides it once it has been seen (30 s), not before; a click snoozes at once', () => {
+  let clock = { t: 0 };
+  let offer = new BreakOffer({ now: () => clock.t });
+  let line = runs(offerTimeline(offer, clock, 60, { typeAt: [10, 20, 40] }));
+  assert(line === 'B40 .20', `typing at 10 s and 20 s (not yet seen), then at 40 s: ${line}`);
+  assert(runs(offerTimeline(offer, clock, 20 * 60)) === '.1180 B20', 'snoozed for 20 minutes after typing');
+  clock = { t: 0 };
+  offer = new BreakOffer({ now: () => clock.t });
+  line = runs(offerTimeline(offer, clock, 21 * 60, { clickAt: [5] }));
+  assert(line === 'B5 .1200 B55', `clicked at 5 s: ${line}`);
+});
+
+test('break offer: never shown or counted while the window is unfocused; a stall that ends unseen starts afresh', () => {
+  const clock = { t: 0 };
+  const offer = new BreakOffer({ now: () => clock.t });
+  assert(runs(offerTimeline(offer, clock, 600, { focused: false })) === '.600', 'unfocused');
+  // Shown 20 s, the stall ends (not seen: no snooze), comes back: shown again for the full 2 minutes.
+  const line = runs(offerTimeline(offer, clock, 200, { wanted: (s) => s < 20 || s >= 30 }));
+  assert(line === 'B20 .10 B120 .50', line);
+});
+
 // --- The VS Code companion, run unchanged against a mock of the VS Code API (A-33) ---
 
 const { createWorld, EXTENSION_DIR } = require('./vscode-mock.cjs');
@@ -1243,6 +1286,30 @@ await atest('companion: revealing a note paints only the decoration it changes; 
     world.tick(1);
     assert(JSON.stringify(world.dots(again)) === '[4,11]' && world.log.setDecorations - before === 2, `reopened editor: dots ${world.dots(again)}, ${world.log.setDecorations - before} calls`);
   }));
+
+// Samples the status bar every `step` seconds: B while it offers a break.
+function statusTimeline(world, seconds, step = 10) {
+  let out = '';
+  for (let s = 0; s < seconds; s += step) { world.tick(step); out += world.status.text.includes('break?') ? 'B' : '.'; }
+  return runs(out);
+}
+
+await atest('companion: an ignored break offer goes after 2 minutes and stays away 20; typing after seeing it does too (K4)', () =>
+  withCompanion({}, (world) => {
+    world.type('a');
+    // Stalled from 3:00: shown 3:00-5:00, away until 25:00, shown again to 27:00.
+    const line = statusTimeline(world, 30 * 60);
+    assert(line === '.17 B12 .120 B12 .19', `every 10 s for 30 minutes: ${line}`);
+  }).then(() => withCompanion({}, (world) => {
+    world.type('a');
+    world.tick(3 * 60 + 40);
+    assert(world.status.text.includes('break?'), 'offered after the stall');
+    world.type('b');
+    world.tick(1);
+    assert(!world.status.text.includes('break?'), 'typing after seeing it hides it');
+    const line = statusTimeline(world, 21 * 60);
+    assert(line === '.119 B7', `after typing, every 10 s for 21 minutes (back exactly 20 minutes after the keystroke): ${line}`);
+  })));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
