@@ -1654,5 +1654,60 @@ test('cite-check output is unchanged for the sample draft: close matches and the
   assert(report.unresolved.length === 1 && report.unresolved[0].key === 'smtih2020' && report.unresolved[0].closeMatches.join() === 'smith2020' && report.unresolved[0].closeMatchDetails[0].title === 'Tide Mills', JSON.stringify(report.unresolved));
 });
 
+// B-27: settings take effect without a reload; dismissing a note replaces the file in one step.
+await atest('companion: a change to pauseSeconds, stuckMinutes or suggestBreaks takes effect without a reload (B-27)', () =>
+  withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5)] }, (world) => {
+    // pauseSeconds 8 -> 30: a note stays held through 12 quiet seconds, and shows after 30.
+    world.changeSetting('pauseSeconds', 30);
+    world.type('a'); world.tick(12);
+    assert(!world.dots().length, 'still held at 12 s with a 30 s pause');
+    world.tick(20);
+    assert(JSON.stringify(world.dots()) === '[4]', `shown after 30 s: ${world.dots()}`);
+    // stuckMinutes 3 -> 1: the break offer appears after one quiet minute instead of three.
+    world.changeSetting('stuckMinutes', 1);
+    world.type('a'); world.tick(40);
+    assert(!/break\?/.test(world.status.text), 'not yet after 40 s');
+    world.tick(40);
+    assert(/break\?/.test(world.status.text), `offered after a minute: ${world.status.text}`);
+    // suggestBreaks off: the offer goes away at once.
+    world.changeSetting('suggestBreaks', false);
+    world.tick(1);
+    assert(!/break\?/.test(world.status.text), `no offer once breaks are off: ${world.status.text}`);
+    // A nonsense value falls back to the default instead of breaking the timing.
+    world.changeSetting('suggestBreaks', true);
+    world.changeSetting('pauseSeconds', 'soon');
+    world.changeSetting('stuckMinutes', -4);
+    world.type('a'); world.tick(9);
+    assert(!/break\?/.test(world.status.text), 'default timings after nonsense values');
+    world.tick(200);
+    assert(/break\?/.test(world.status.text), 'default 3 minutes still offers a break');
+  }));
+
+await atest('companion: dismissing a note re-reads the file, keeps notes added meanwhile, and leaves no temp file (B-27)', () =>
+  withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5), companionNote('n2', 'drafts/ch3.md', 9)] }, async (world, dir) => {
+    world.tick(10);
+    // Claude queues another note after the companion last read the file, before the writer dismisses n1.
+    writeNotes(dir, [companionNote('n1', 'drafts/ch3.md', 5), companionNote('n2', 'drafts/ch3.md', 9), companionNote('n3', 'drafts/ch3.md', 12)]);
+    world.answer((items) => items.find((i) => i.note && i.note.id === 'n1'), 'Dismiss');
+    await world.run('margin.notes');
+    await world.settle();
+    const file = path.join(dir, '.margin', 'suggestions.json');
+    const items = JSON.parse(fs.readFileSync(file, 'utf8')).items;
+    assert(items.map((i) => `${i.id}:${i.status}`).join() === 'n1:dismissed,n2:open,n3:open', items.map((i) => `${i.id}:${i.status}`).join());
+    assert(!fs.readdirSync(path.join(dir, '.margin')).some((n) => n.endsWith('.tmp')), 'no temp file left behind');
+  }));
+
+await atest('companion: a notes file that can’t be read is left untouched by a dismiss (B-27)', () =>
+  withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5)] }, async (world, dir) => {
+    world.tick(10);
+    const file = path.join(dir, '.margin', 'suggestions.json');
+    fs.writeFileSync(file, '{"version":1,"items":[{"id":"n1"');
+    world.answer((items) => items[0], 'Dismiss');
+    await world.run('margin.notes');
+    await world.settle();
+    assert(fs.readFileSync(file, 'utf8') === '{"version":1,"items":[{"id":"n1"', 'damaged file untouched');
+    assert(!fs.readdirSync(path.join(dir, '.margin')).some((n) => n.endsWith('.tmp')), 'no temp file left behind');
+  }));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

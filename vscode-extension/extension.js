@@ -23,9 +23,11 @@ const kindOf = (n) => (Object.prototype.hasOwnProperty.call(KIND_STYLE, n.kind) 
 
 function activate(context) {
   const config = () => vscode.workspace.getConfiguration('margin');
+  // A setting that is missing or not a positive number falls back to its default.
+  const positive = (key, fallback) => { const v = Number(config().get(key)); return Number.isFinite(v) && v > 0 ? v : fallback; };
   const tracker = new PauseTracker({
-    pauseMs: config().get('pauseSeconds') * 1000,
-    stuckMs: config().get('stuckMinutes') * 60 * 1000
+    pauseMs: positive('pauseSeconds', 8) * 1000,
+    stuckMs: positive('stuckMinutes', 3) * 60 * 1000
   });
   const offer = new BreakOffer();
   const revealed = new Set();
@@ -98,15 +100,32 @@ function activate(context) {
     }
   }
 
+  // Dismissing a note changes one note's status in a file that Claude's scripts
+  // also write. The file is read again right before, and replaced in one step
+  // (temp file, then rename), so a reader never sees half a file and a note Claude
+  // queued a moment ago is not lost. A file that can't be understood is left alone.
   function saveStatus(id, statusValue) {
     const file = notesFile();
+    if (!file) return false;
+    const tmp = `${file}.${process.pid}.tmp`;
     try {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const item = (data.items || []).find((n) => n.id === id);
-      if (item) item.status = statusValue;
-      fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+      const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+      if (!data || !Array.isArray(data.items)) return false;
+      const item = data.items.find((n) => n && n.id === id);
+      if (!item || item.status === statusValue) return false;
+      item.status = statusValue;
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
+      for (let attempt = 0; ; attempt++) {
+        try { fs.renameSync(tmp, file); break; } catch (err) {
+          // Windows can refuse a rename for a moment while another program has the file open.
+          if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
+        }
+      }
+      return true;
     } catch {
-      // Nothing to update.
+      try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
+      return false;
     }
   }
 
@@ -211,6 +230,14 @@ function activate(context) {
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => paint()));
+
+  // A change to a margin.* setting takes effect at once, without reloading the window.
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (!e.affectsConfiguration('margin')) return;
+    tracker.pauseMs = positive('pauseSeconds', 8) * 1000;
+    tracker.stuckMs = positive('stuckMinutes', 3) * 60 * 1000;
+    refresh();
+  }));
 
   // Margin's files: the notes queue, and the project's settings.
   const r = root();

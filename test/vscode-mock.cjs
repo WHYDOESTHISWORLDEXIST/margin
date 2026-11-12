@@ -33,7 +33,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
   global.clearTimeout = (id) => { timers.delete(id); };
 
   const log = { setDecorations: 0, statusWrites: 0, shown: [], reveals: [], messages: [], clipboard: [], panels: [], picks: [], settingsRead: new Set() };
-  const listeners = { edit: [], windowState: [], visible: [] };
+  const listeners = { edit: [], windowState: [], visible: [], config: [] };
   const on = (list) => (cb) => { list.push(cb); return { dispose() { const i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); } }; };
   const settings = { ...DEFAULT_CONFIG, ...config };
   const relative = (fsPath) => path.relative(root, fsPath).split(path.sep).join('/');
@@ -82,6 +82,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
       workspaceFolders: root ? [{ uri: Uri.file(root), name: path.basename(root), index: 0 }] : undefined,
       getConfiguration: (section) => ({ get: (key) => { log.settingsRead.add(`${section}.${key}`); return settings[key]; } }),
       onDidChangeTextDocument: on(listeners.edit),
+      onDidChangeConfiguration: on(listeners.config),
       createFileSystemWatcher(pattern) {
         const w = { pattern: pattern.pattern, change: [], create: [], delete: [] };
         watchers.push(w);
@@ -164,6 +165,8 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
     open(rel) { const editor = makeEditor(documentAt(path.join(root, rel))); showEditors([...visible, editor], editor); return editor; },
     close(editor) { const rest = visible.filter((e) => e !== editor); showEditors(rest, rest.includes(active) ? active : rest[0] || null); },
     fileChanged(rel, kind = 'change') { for (const w of watchers) if (w.pattern === rel) for (const cb of [...w[kind]]) cb(Uri.file(path.join(root, rel))); },
+    // The writer changes a margin.* setting; VS Code tells the extension.
+    changeSetting(key, value) { settings[key] = value; for (const cb of [...listeners.config]) cb({ affectsConfiguration: (section) => section === 'margin' || section === `margin.${key}` }); },
     answer(...picks) { answers.push(...picks); },
     run: (id, ...args) => commands[id](...args),
     settle: async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); },
