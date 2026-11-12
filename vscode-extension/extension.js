@@ -16,6 +16,9 @@ const KIND_STYLE = {
   note: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Note' }
 };
 const RETURN_SPOT_MS = 30 * 60 * 1000;
+// Windows and macOS drives usually ignore case: "Drafts/Ch3.md" is drafts/ch3.md.
+const IGNORE_CASE = process.platform === 'win32' || process.platform === 'darwin';
+const fileKey = (file) => (IGNORE_CASE ? String(file).toLowerCase() : String(file));
 const kindOf = (n) => (Object.prototype.hasOwnProperty.call(KIND_STYLE, n.kind) ? n.kind : 'note');
 
 function activate(context) {
@@ -64,6 +67,9 @@ function activate(context) {
     return r ? path.join(r, '.margin', 'suggestions.json') : null;
   }
 
+  // Notes whose file exists (checked each time the notes are loaded); only
+  // these can show as a dot, so only these are counted.
+  let present = new Set();
   function loadNotes() {
     const file = notesFile();
     try {
@@ -72,6 +78,8 @@ function activate(context) {
     } catch {
       notes = [];
     }
+    const r = root();
+    present = new Set(notes.filter((n) => r && typeof n.file === 'string' && fs.existsSync(path.join(r, n.file))).map((n) => n.id));
     refresh();
   }
 
@@ -117,11 +125,12 @@ function activate(context) {
   function paint() {
     for (const editor of vscode.window.visibleTextEditors) {
       const rel = relPath(editor.document);
+      const key = rel === null ? null : fileKey(rel);
       const lastLine = editor.document.lineCount - 1;
       const byKind = {};
       for (const kind of Object.keys(KIND_STYLE)) byKind[kind] = [];
       for (const n of notes) {
-        if (n.file !== rel || !revealed.has(n.id)) continue;
+        if (!revealed.has(n.id) || key === null || fileKey(n.file) !== key) continue;
         byKind[kindOf(n)].push({ n, line: Math.min(Math.max((n.line || 1) - 1, 0), lastLine) });
       }
       let last = painted.get(editor);
@@ -145,8 +154,9 @@ function activate(context) {
   }
 
   function refresh() {
-    const shown = notes.filter((n) => revealed.has(n.id)).length;
-    const held = notes.length - shown;
+    const live = notes.filter((n) => present.has(n.id));
+    const shown = live.filter((n) => revealed.has(n.id)).length;
+    const held = live.length - shown;
     const editor = vscode.window.activeTextEditor;
     const stalled = Boolean(config().get('suggestBreaks') && projectAllowsBreaks && editor && watched(editor.document) && tracker.isStalled());
     if (offer.update(stalled, windowFocused)) {

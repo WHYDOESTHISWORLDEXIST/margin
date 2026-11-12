@@ -1423,5 +1423,23 @@ await atest('companion: after a walk the writer\'s place is highlighted on retur
   });
 });
 
+// A-24: note files are matched as the drive matches them.
+test('a queued note keeps the file name as it is on disk; a file that doesn\'t exist yet keeps what was typed (A-24)', () => {
+  const dir = project();
+  const add = run('suggestions.mjs', ['add', '--file', 'DRAFTS/CH3.MD', '--line', '1', '--message', 'x', '--file', 'drafts/New.md', '--message', 'y'], dir);
+  const files = JSON.parse(fs.readFileSync(marginPath(dir, 'suggestions.json'), 'utf8')).items.map((i) => i.file);
+  const ignoresCase = fs.existsSync(path.join(dir, 'DRAFTS', 'CH3.MD'));
+  assert(add.code === 0 && files[0] === (ignoresCase ? 'drafts/ch3.md' : 'DRAFTS/CH3.MD') && files[1] === 'drafts/New.md', `${add.out} ${JSON.stringify(files)}`);
+});
+
+await atest('companion: a note matches its file whatever the case on Windows and macOS, and only notes whose file exists are counted (A-24)', () =>
+  withCompanion({ notes: [companionNote('n1', 'Drafts/Ch3.md', 3), companionNote('n2', 'drafts/gone.md', 2)] }, (world) => {
+    world.tick(10);
+    const ignoresCase = process.platform === 'win32' || process.platform === 'darwin';
+    const dots = JSON.stringify(world.dots(world.editors[0]));
+    assert(dots === (ignoresCase ? '[2]' : '[]'), `dots: ${dots}`);
+    assert(world.status.text === (ignoresCase ? '$(circle-small-filled) Margin · 1' : '$(circle-small) Margin'), `status: ${world.status.text}`);
+  }));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

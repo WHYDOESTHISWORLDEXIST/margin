@@ -9,7 +9,7 @@
 //   node suggestions.mjs clear             removes dismissed notes
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { projectDir, scriptArgs, marginDir, readJson, writeJsonAtomic, keepAside, isPlainObject, rel } from './lib.mjs';
+import { projectDir, scriptArgs, marginDir, readJson, writeJsonAtomic, keepAside, isPlainObject, rel, onDiskSpelling } from './lib.mjs';
 
 const root = projectDir();
 const file = path.join(marginDir(root), 'suggestions.json');
@@ -70,7 +70,7 @@ if (command === 'add') {
     if (!isPlainObject(n) || !n.file || !n.message) { console.log('Each note needs "file" and "message".'); continue; }
     data.items.push({
       id: crypto.randomBytes(3).toString('hex'),
-      file: rel(root, String(n.file)),
+      file: onDiskSpelling(root, rel(root, String(n.file))), // as on disk, so the companion finds it
       line: Number(n.line) || 1,
       kind: KINDS.includes(n.kind) ? n.kind : 'note',
       message: String(n.message).slice(0, 400),
