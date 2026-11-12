@@ -360,6 +360,79 @@ export function saveFocus(root, focus) {
   writeJsonAtomic(focusPath(root), { enabled: Boolean(focus.enabled), paths: focus.paths });
 }
 
+// What focus lets Claude read, shared by the Read/Grep guard and the shell
+// guard so both decide alike and say the same thing. reasonFor(path) and
+// searchReasonFor(folder) return null when allowed, else the reason to give.
+// Locations are compared where they really point, so a link (symlink or Windows
+// junction) inside a focus folder can't reach outside it.
+export function focusRules(root, input, focus) {
+  // Where things really point is looked up once per run: a long shell command can
+  // name the same folders many times.
+  const realCache = new Map();
+  const real = (p) => { let r = realCache.get(p); if (r === undefined) { r = realPath(p); realCache.set(p, r); } return r; };
+  const realRoot = () => real(root);
+  let focusBases;
+  const bases = () => (focusBases ??= focus.paths.map((p) => real(path.resolve(root, p))));
+  let sessions;
+  const list = focus.paths.length ? focus.paths.join(', ') : '(nothing picked yet)';
+  const damaged = focus.state === 'damaged'
+    ? `Margin's focus list (.margin/focus.json) is damaged (${focus.problem}), so reading files is paused to keep the writer's focus. Ask the writer to run /margin:focus status, which repairs it.`
+    : null;
+
+  // Claude Code's own working files for this session: its scratchpad, and the
+  // folder next to the transcript where it saves long tool results for Claude to
+  // read back. Only outside the project, so they can never open a hole in it.
+  function sessionFolders() {
+    if (sessions) return sessions;
+    const out = [];
+    if (typeof input.scratchpad_dir === 'string' && input.scratchpad_dir.trim()) out.push(real(input.scratchpad_dir));
+    if (typeof input.transcript_path === 'string' && /\.jsonl$/i.test(input.transcript_path)) {
+      const t = path.resolve(input.transcript_path);
+      out.push(real(path.join(path.dirname(t), path.basename(t).replace(/\.jsonl$/i, ''))));
+    }
+    return (sessions = out.filter((dir) => !isInside(dir, realRoot()) && !isInside(realRoot(), dir)));
+  }
+
+  // Always readable: the plugin's own files, the session folders above, and
+  // Margin's own files right inside .margin/ (settings, focus list, notes, logs).
+  // Not .margin/history/ or .margin/trash/: they hold copies of the writer's
+  // files, including ones outside the focus list.
+  function alwaysAllowed(realTarget) {
+    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+    if (pluginRoot && isInside(realTarget, real(pluginRoot))) return true;
+    if (sessionFolders().some((dir) => isInside(realTarget, dir))) return true;
+    if (fileKey(root, path.dirname(realTarget)) !== fileKey(root, real(marginDir(root)))) return false;
+    if (['history', 'trash'].includes(path.basename(realTarget).toLowerCase())) return false;
+    try { return !fs.statSync(realTarget).isDirectory(); } catch { return true; }
+  }
+
+  function reasonFor(target) {
+    const realTarget = real(target);
+    if (alwaysAllowed(realTarget)) return null;
+    if (damaged) return damaged;
+    if (bases().some((b) => isInside(realTarget, b))) return null;
+    if (!isInside(realTarget, realRoot())) {
+      return `Margin focus is on, and ${target} is outside this project. Claude can read only: ${list}. Ask the writer before going further.`;
+    }
+    return (
+      `Margin focus is on, and ${rel(root, target)} isn't in it. ` +
+      `Claude can read only: ${list}. ` +
+      `Ask the writer before going further. They can widen it with "/margin:focus add ${rel(root, target)}" or turn it off with "/margin:focus off".`
+    );
+  }
+
+  // A search of `dir` and everything below it.
+  function searchReasonFor(dir) {
+    const realDir = real(dir);
+    if (!damaged && !alwaysAllowed(realDir) && isInside(realRoot(), realDir) && !bases().some((b) => isInside(realDir, b))) {
+      return `Margin focus is on, so searching the whole project is blocked. Search inside one of: ${list}.`;
+    }
+    return reasonFor(dir);
+  }
+
+  return { reasonFor, searchReasonFor, list };
+}
+
 // ---------------------------------------------------------------------------
 // Paths.
 // ---------------------------------------------------------------------------

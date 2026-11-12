@@ -7,7 +7,7 @@ allowed-tools: Bash(node *), Glob
 
 # Focus: pick which files Claude may read
 
-While focus is on, a hook blocks Claude from reading or searching anything outside the picked list. Margin's own settings and lists in `.margin/` stay readable; its backups (`.margin/history/`, `.margin/trash/`) don't, since they hold copies of the writer's files.
+While focus is on, hooks keep Claude's reading inside the picked list. Outside it, the Read and Grep tools are blocked, and so are shell commands that read files (`cat`, `head`, `sed`, `grep -r`, `rg`, `Get-Content`, `Select-String` and the like). When a command might read an outside file but Margin can't be sure (a one-line script or another program naming the file, a file name in a variable), the writer is asked first. File and folder names stay visible, and Margin can't see inside programs that open files on their own. Margin's own settings and lists in `.margin/` stay readable; its backups (`.margin/history/`, `.margin/trash/`) don't, since they hold copies of the writer's files.
 
 The writer typed: `$ARGUMENTS`
 
@@ -33,5 +33,5 @@ Commands: `status`, `add <path...>`, `remove <path...>`, `on`, `off`, `clear`. A
 ## Rules
 
 - Never add paths the writer didn't choose, even if a file looks relevant. Suggest it instead.
-- When the guard blocks a read, tell the writer which file you wanted and why, and let them decide whether to add it.
+- When the guard blocks a read, tell the writer which file you wanted and why, and let them decide whether to add it. Don't try another tool or command to reach it.
 - Keep replies short: the resulting list is the answer.

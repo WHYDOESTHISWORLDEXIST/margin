@@ -887,6 +887,117 @@ test('path comparisons follow the drive, not the OS: a macOS-style run on a driv
   assert(res.stdout.trim() === `false ${driveIgnoresCase(dir)}`, `expected "false ${driveIgnoresCase(dir)}": ${res.stdout}${res.stderr}`);
 });
 
+// --- Shell commands under focus (A-04/B-04, K7) ---
+
+const shellCheck = await import(pathToFileURL(path.join(scripts, 'shell-check.mjs')).href);
+const marginLib = await import(pathToFileURL(path.join(scripts, 'lib.mjs')).href);
+const k7 = project();
+run('focus.mjs', ['add', 'drafts', 'notes/interviews.md'], k7);
+const k7rules = marginLib.focusRules(k7, {}, marginLib.readFocus(k7));
+const fwdSlashes = (p) => p.split(path.sep).join('/');
+const decideShell = (dialect, command) => {
+  const r = shellCheck.decide(command, { dialect, cwd: k7, scriptsDir: scripts, root: k7, rules: k7rules });
+  return r ? r.decision : 'allow';
+};
+// [dialect, command, expected]: the command lists from both round-1 reviews, plus edge cases.
+const SHELL_TABLE = [
+  ['bash', 'ls -la notes', 'allow'], ['bash', 'find . -name "*.md"', 'allow'], ['bash', 'git status', 'allow'], ['bash', 'npm test', 'allow'],
+  ['bash', 'echo "notes/private.md is off limits"', 'allow'], ['bash', "printf '%s\\n' notes/private.md", 'allow'],
+  ['bash', 'cat drafts/ch3.md', 'allow'], ['bash', 'cat drafts/ch3.md notes/interviews.md', 'allow'], ['bash', 'grep -n TODO drafts/ch3.md', 'allow'],
+  ['bash', 'grep -n mill drafts/ch3.md', 'allow'], ['bash', 'wc -w drafts/*.md', 'allow'], ['bash', 'pandoc drafts/ch3.md -o out.pdf', 'allow'],
+  ['bash', 'head -5 notes\\private.md', 'allow'],                     // bash drops the backslash: notesprivate.md doesn't exist
+  ['bash', `node "${fwdSlashes(scripts)}/inventory.mjs" --project "${fwdSlashes(k7)}"`, 'allow'],
+  ['bash', `node "${fwdSlashes(scripts)}/focus.mjs" --project "${fwdSlashes(k7)}" status`, 'allow'],
+  ['bash', "cat > drafts/new.md <<'EOF'\nhead notes/private.md\nEOF", 'allow'],   // a heredoc body is data
+  ['bash', 'mkdir -p archive && mv notes/private.md archive/', 'allow'], ['bash', 'echo hi > notes/private.md', 'allow'],
+  ['bash', 'sed -n 1,5p drafts/ch3.md', 'allow'], ['bash', 'cd drafts && cat ch3.md', 'allow'], ['bash', 'cat notes/interviews.md', 'allow'],
+  ['bash', 'cat ./notes/../drafts/ch3.md', 'allow'], ['bash', 'grep -r mill drafts', 'allow'], ['bash', 'rg -n mill drafts/ch3.md', 'allow'],
+  ['bash', '# cat notes/private.md', 'allow'],
+  ['bash', 'cat notes/private.md', 'deny'], ['bash', 'head -20 notes/private.md', 'deny'], ['bash', 'head -5 notes/private.md', 'deny'],
+  ['bash', 'tail -f notes/private.md', 'deny'], ['bash', 'less notes/private.md', 'deny'], ['bash', 'bat notes/private.md', 'deny'],
+  ['bash', 'sed -n 1,5p notes/private.md', 'deny'], ['bash', "awk '{print $1}' notes/private.md", 'deny'], ['bash', 'cat drafts/../notes/private.md', 'deny'],
+  ['bash', 'cd notes && cat private.md', 'deny'], ['bash', '( cd notes; cat private.md )', 'deny'], ['bash', 'cat < notes/private.md', 'deny'],
+  ['bash', 'cat drafts/ch3.md notes/private.md', 'deny'], ['bash', 'cat notes/private.md 2>/dev/null', 'deny'], ['bash', 'cat -n notes/private.md | head', 'deny'],
+  ['bash', 'grep -rn mill .', 'deny'], ['bash', 'grep -r mill .', 'deny'], ['bash', 'grep -n mill drafts/ch3.md notes/private.md', 'deny'],
+  ['bash', 'grep -e mill notes/private.md', 'deny'], ['bash', 'grep -f notes/private.md drafts/ch3.md', 'deny'], ['bash', 'rg mill', 'deny'],
+  ['bash', 'rg mill notes', 'deny'], ['bash', 'diff drafts/ch3.md notes/private.md', 'deny'], ['bash', 'cp notes/private.md drafts/copy.md', 'deny'],
+  ['bash', 'F=notes/private.md; cat "$F"', 'deny'], ['bash', 'export F=notes/private.md && cat $F', 'deny'],
+  ['bash', 'bash -c "cat notes/private.md"', 'deny'], ['bash', "sh -c 'head -1 notes/private.md'", 'deny'],
+  ['bash', 'sudo cat notes/private.md', 'deny'], ['bash', 'env LC_ALL=C cat notes/private.md', 'deny'], ['bash', 'timeout 5 cat notes/private.md', 'deny'],
+  ['bash', 'find . -name "*.md" -exec cat {} +', 'deny'], ['bash', 'find notes -name "*.md" | xargs cat', 'deny'],
+  ['bash', 'cat */private.md', 'deny'], ['bash', 'cat notes/*.md', 'deny'], ['bash', 'cat drafts/ch3.md &&\\\n cat notes/private.md', 'deny'],
+  ['bash', `cat "${fwdSlashes(k7)}/notes/private.md"`, 'deny'],
+  ['bash', 'node -e "console.log(require(\'fs\').readFileSync(\'notes/private.md\',\'utf8\'))"', 'ask'],
+  ['bash', 'python summarize.py notes/private.md', 'ask'], ['bash', 'python3 - <<\'EOF\'\nprint(open("notes/private.md").read())\nEOF', 'ask'],
+  ['bash', 'cat "$UNKNOWN_FILE"', 'ask'], ['bash', 'cat $(ls)', 'ask'], ['bash', 'cat $(ls notes)', 'ask'], ['bash', 'cat $(echo notes/private.md)', 'ask'],
+  ['bash', 'xargs cat < filelist.txt', 'ask'], ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'for f in notes/*.md; do head -1 "$f"; done', 'ask'],
+  ['powershell', 'Get-ChildItem notes', 'allow'], ['powershell', 'Get-Content drafts\\ch3.md', 'allow'],
+  ['powershell', 'Get-Content -Path .\\drafts\\ch3.md -TotalCount 5', 'allow'], ['powershell', 'Write-Output "notes\\private.md is off limits"', 'allow'],
+  ['powershell', 'Test-Path notes\\private.md', 'allow'], ['powershell', 'Get-ChildItem drafts | Get-Content', 'allow'],
+  ['powershell', 'Set-Content notes\\private.md "x"', 'allow'], ['powershell', '# Get-Content notes\\private.md', 'allow'],
+  ['powershell', 'Get-Content notes\\private.md', 'deny'], ['powershell', 'gc .\\notes\\private.md | Select-Object -First 5', 'deny'],
+  ['powershell', 'type notes\\private.md', 'deny'], ['powershell', 'cat notes\\private.md', 'deny'], ['powershell', 'head -5 notes\\private.md', 'deny'],
+  ['powershell', "Get-Content -LiteralPath 'notes\\private.md'", 'deny'], ['powershell', 'gc notes\\private.md -Tail 3', 'deny'],
+  ['powershell', 'Import-Csv notes\\private.md', 'deny'], ['powershell', 'Get-Content drafts\\ch3.md, notes\\private.md', 'deny'],
+  ['powershell', 'Select-String -Pattern mill -Path notes\\*.md', 'deny'], ['powershell', 'Select-String -Path notes\\* mill', 'deny'],
+  ['powershell', 'Select-String mill notes\\private.md', 'deny'], ['powershell', 'Get-ChildItem -Recurse notes | Select-String mill', 'deny'],
+  ['powershell', 'Copy-Item notes\\private.md drafts\\copy.md', 'deny'], ['powershell', 'Set-Location notes; Get-Content private.md', 'deny'],
+  ['powershell', 'powershell -Command "Get-Content notes\\private.md"', 'deny'], ['powershell', '$f = "notes\\private.md"; Get-Content $f', 'deny'],
+  ['powershell', 'findstr /s mill *.md', 'deny'],
+  ['powershell', 'Get-ChildItem drafts | ForEach-Object { Get-Content $_ }', 'ask'], ['powershell', 'Get-Content (Join-Path notes private.md)', 'ask'],
+  ['powershell', 'node -e "console.log(require(\'fs\').readFileSync(\'notes/private.md\',\'utf8\'))"', 'ask']
+];
+
+test('focus on: shell commands are allowed, denied or asked about as the table says', () => {
+  const wrong = SHELL_TABLE.filter(([dialect, command, expected]) => decideShell(dialect, command) !== expected)
+    .map(([dialect, command, expected]) => `${dialect}: ${JSON.stringify(command)} expected ${expected}, got ${decideShell(dialect, command)}`);
+  assert(!wrong.length, `\n       ${wrong.join('\n       ')}`);
+});
+
+test('focus on: the shell check stays fast', () => {
+  let t0 = process.hrtime.bigint();
+  for (let i = 0; i < 10; i++) for (const [dialect, command] of SHELL_TABLE.slice(0, 100)) decideShell(dialect, command);
+  const thousand = Number(process.hrtime.bigint() - t0) / 1e6;
+  const long = Array.from({ length: 200 }, (_, i) => `grep -n word${i} drafts/ch3.md`).join(' && ');
+  t0 = process.hrtime.bigint();
+  decideShell('bash', long);
+  const longMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert(thousand < 2000 && longMs < 50, `1,000 checks took ${thousand.toFixed(0)} ms, a 200-part command ${longMs.toFixed(1)} ms`);
+});
+
+function shellHook(dir, tool, command, extraEnv = {}) {
+  return run('shell-guard.mjs', [], dir, { cwd: dir, hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command }, tool_use_id: 'toolu_sh' }, extraEnv);
+}
+
+test('the shell guard hook: same reasons as Read, both shells, silent when focus is off', () => {
+  const denied = shellHook(k7, 'Bash', 'cat notes/private.md');
+  assert(decisionOf(denied) === 'deny' && reasonOf(denied).includes('/margin:focus add notes/private.md'), `${denied.out}${denied.err}`);
+  assert(decisionOf(shellHook(k7, 'PowerShell', 'Get-Content notes\\private.md')) === 'deny', 'PowerShell should be covered too');
+  assert(shellHook(k7, 'Bash', 'cat drafts/ch3.md').out === '', 'an allowed command gets no answer');
+  const outsideFile = path.join(path.dirname(k7), `outside ${path.basename(k7)}.md`);
+  fs.writeFileSync(outsideFile, 'elsewhere\n');
+  const outside = reasonOf(shellHook(k7, 'Bash', `cat "${fwdSlashes(outsideFile)}"`));
+  fs.rmSync(outsideFile, { force: true });
+  assert(outside.includes('outside this project') && !outside.includes('/margin:focus add'), outside);
+  const off = project();
+  run('focus.mjs', ['add', 'drafts'], off);
+  run('focus.mjs', ['off'], off);
+  assert(shellHook(off, 'Bash', 'cat notes/private.md').out === '', 'focus off: no answer');
+  assert(shellHook(project(), 'Bash', 'cat notes/private.md').out === '', 'no focus list: no answer');
+  const hooks = JSON.parse(fs.readFileSync(path.join(scripts, '..', 'hooks', 'hooks.json'), 'utf8')).hooks.PreToolUse;
+  assert(hooks.some((h) => h.matcher === 'Bash|PowerShell' && h.hooks[0].command.includes('shell-guard.mjs')), 'hooks.json should register the shell guard');
+});
+
+test('the shell guard: a damaged focus list pauses shell reads; its own failure asks, never blocks', () => {
+  const dir = project();
+  putMargin(dir, 'focus.json', '{"enabled": true, "paths": ["dra');
+  const read = shellHook(dir, 'Bash', 'cat drafts/ch3.md');
+  assert(decisionOf(read) === 'deny' && reasonOf(read).includes('/margin:focus status'), `${read.out}${read.err}`);
+  assert(shellHook(dir, 'Bash', 'ls -la').out === '', 'listing is still fine');
+  const failed = shellHook(k7, 'Bash', 'cat notes/private.md', { MARGIN_TEST_FAIL: 'shell-guard' });
+  assert(failed.code === 0 && decisionOf(failed) === 'ask', `${failed.out}${failed.err}`);
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });
