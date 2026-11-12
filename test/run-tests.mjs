@@ -1215,5 +1215,34 @@ await atest('companion: a queued note waits for a pause, then shows as a dot on 
     assert(world.status.text === '$(circle-small-filled) Margin · 1', world.status.text);
   }));
 
+// K5: nothing is sent to the editor or the status bar unless it changed.
+await atest('companion: nothing is repainted or rewritten while nothing changes, idle or typing (K5)', () =>
+  withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5), companionNote('n2', 'drafts/ch3.md', 9, 'related')], docs: ['drafts/ch3.md', 'notes/interviews.md'] }, (world) => {
+    world.tick(10);
+    assert(world.dots(world.editors[0]).length === 2, 'both notes shown');
+    const before = { ...world.log };
+    world.tick(60);
+    for (let i = 0; i < 30; i++) { world.type('word '); world.tick(1); }
+    world.tick(60);
+    const calls = world.log.setDecorations - before.setDecorations;
+    const writes = world.log.statusWrites - before.statusWrites;
+    assert(calls === 0 && writes === 0, `over 150 s with nothing new: ${calls} setDecorations calls, ${writes} status writes`);
+  }));
+
+await atest('companion: revealing a note paints only the decoration it changes; an editor shown again gets its dots back', () =>
+  withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5)], docs: ['drafts/ch3.md', 'notes/interviews.md'] }, (world, dir) => {
+    world.tick(10);
+    let before = world.log.setDecorations;
+    writeNotes(dir, [companionNote('n1', 'drafts/ch3.md', 5), companionNote('n2', 'drafts/ch3.md', 12, 'contradiction')]);
+    world.fileChanged('.margin/suggestions.json');
+    world.tick(10);
+    assert(world.log.setDecorations - before === 1, `one new contradiction note: ${world.log.setDecorations - before} setDecorations calls`);
+    assert(JSON.stringify(world.dots(world.editors[0])) === '[4,11]', `dots: ${world.dots(world.editors[0])}`);
+    before = world.log.setDecorations;
+    const again = world.open('drafts/ch3.md');
+    world.tick(1);
+    assert(JSON.stringify(world.dots(again)) === '[4,11]' && world.log.setDecorations - before === 2, `reopened editor: dots ${world.dots(again)}, ${world.log.setDecorations - before} calls`);
+  }));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

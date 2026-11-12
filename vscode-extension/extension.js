@@ -16,6 +16,7 @@ const KIND_STYLE = {
   note: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Note' }
 };
 const BREAK_SNOOZE_MS = 20 * 60 * 1000;
+const kindOf = (n) => (Object.prototype.hasOwnProperty.call(KIND_STYLE, n.kind) ? n.kind : 'note');
 
 function activate(context) {
   const config = () => vscode.workspace.getConfiguration('margin');
@@ -46,9 +47,12 @@ function activate(context) {
   context.subscriptions.push(returnHighlight);
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  status.command = 'margin.notes';
   status.show();
   context.subscriptions.push(status);
+  // What the status item and each editor last showed. Nothing is re-sent while
+  // it stays the same, and VS Code keeps dots in place as the writer edits.
+  const statusShown = {};
+  const painted = new WeakMap(); // editor -> Map(kind -> signature)
 
   function root() {
     const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
@@ -92,19 +96,35 @@ function activate(context) {
     return r ? path.relative(r, doc.uri.fsPath).split(path.sep).join('/') : null;
   }
 
+  // Sends an editor's dots only for the kinds whose notes changed since it last
+  // showed them. A newly shown editor starts with none, so it gets all of its own.
   function paint() {
     for (const editor of vscode.window.visibleTextEditors) {
       const rel = relPath(editor.document);
+      const lastLine = editor.document.lineCount - 1;
       const byKind = {};
       for (const kind of Object.keys(KIND_STYLE)) byKind[kind] = [];
       for (const n of notes) {
         if (n.file !== rel || !revealed.has(n.id)) continue;
-        const line = Math.min(Math.max((n.line || 1) - 1, 0), editor.document.lineCount - 1);
-        const style = KIND_STYLE[n.kind] || KIND_STYLE.note;
-        const hover = new vscode.MarkdownString(`**${style.label}**\n\n${n.message}${n.source ? `\n\n_See ${n.source}_` : ''}`);
-        (byKind[n.kind] || byKind.note).push({ range: new vscode.Range(line, 0, line, 0), hoverMessage: hover });
+        byKind[kindOf(n)].push({ n, line: Math.min(Math.max((n.line || 1) - 1, 0), lastLine) });
       }
-      for (const [kind, list] of Object.entries(byKind)) editor.setDecorations(decorations[kind], list);
+      let last = painted.get(editor);
+      if (!last) painted.set(editor, (last = new Map()));
+      for (const [kind, list] of Object.entries(byKind)) {
+        const signature = JSON.stringify(list.map(({ n, line }) => [n.id, line, n.message, n.source]));
+        if ((last.get(kind) || '[]') === signature) continue;
+        last.set(kind, signature);
+        editor.setDecorations(decorations[kind], list.map(({ n, line }) => ({
+          range: new vscode.Range(line, 0, line, 0),
+          hoverMessage: new vscode.MarkdownString(`**${KIND_STYLE[kind].label}**\n\n${n.message}${n.source ? `\n\n_See ${n.source}_` : ''}`)
+        })));
+      }
+    }
+  }
+
+  function setStatus(next) {
+    for (const key of ['text', 'tooltip', 'command']) {
+      if (statusShown[key] !== next[key]) status[key] = statusShown[key] = next[key];
     }
   }
 
@@ -115,13 +135,17 @@ function activate(context) {
       config().get('suggestBreaks') && windowFocused && Date.now() > snoozedUntil && tracker.isStalled() &&
       vscode.window.activeTextEditor && watched(vscode.window.activeTextEditor.document);
     if (offerBreak) {
-      status.text = '$(coffee) Margin · break?';
-      status.tooltip = 'A short break is here if you want one. Click to choose, or just ignore this.';
-      status.command = 'margin.breakMenu';
+      setStatus({
+        text: '$(coffee) Margin · break?',
+        tooltip: 'A short break is here if you want one. Click to choose, or just ignore this.',
+        command: 'margin.breakMenu'
+      });
     } else {
-      status.text = shown ? `$(circle-small-filled) Margin · ${shown}` : '$(circle-small) Margin';
-      status.tooltip = `${shown} margin note${shown === 1 ? '' : 's'}${held ? ` · ${held} held until your next pause` : ''}`;
-      status.command = 'margin.notes';
+      setStatus({
+        text: shown ? `$(circle-small-filled) Margin · ${shown}` : '$(circle-small) Margin',
+        tooltip: `${shown} margin note${shown === 1 ? '' : 's'}${held ? ` · ${held} held until your next pause` : ''}`,
+        command: 'margin.notes'
+      });
     }
     paint();
   }
@@ -153,7 +177,7 @@ function activate(context) {
     if (state.focused && walkReturn) showReturnSpot();
   }));
 
-  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(paint));
+  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => paint()));
 
   // Notes file.
   const r = root();
@@ -165,6 +189,7 @@ function activate(context) {
     context.subscriptions.push(watcher);
   }
 
+  // Cheap checks once a second; refresh() only touches the UI when something changed.
   const timer = setInterval(() => {
     if (tracker.isPaused()) revealHeld();
     refresh();
@@ -228,7 +253,7 @@ function activate(context) {
       return;
     }
     const pick = await vscode.window.showQuickPick(notes.map((n) => ({
-      label: `${(KIND_STYLE[n.kind] || KIND_STYLE.note).label}: ${n.file}:${n.line}`,
+      label: `${KIND_STYLE[kindOf(n)].label}: ${n.file}:${n.line}`,
       detail: n.message,
       note: n
     })), { placeHolder: 'Margin notes' });
