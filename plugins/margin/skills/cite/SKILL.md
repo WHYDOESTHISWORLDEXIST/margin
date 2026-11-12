@@ -19,6 +19,8 @@ The writer typed: `$ARGUMENTS`
 
    Use the draft and library they named, each in its own double quotes so a name with spaces stays one path; leave out the library if they didn't name one.
 
+   If they named no draft, use the most recently changed file in the drafts folder (the `drafts` setting, from `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`), and say which one you picked.
+
 3. If the result has an `error`, say so in one line, list no keys, and stop:
    - `no_library`: no bibliography was found. Suggest exporting one from Zotero with Better BibTeX, then saving its path with `/margin:setup`.
    - `library_missing`: the library named in the command or in setup (`library`) isn't there.

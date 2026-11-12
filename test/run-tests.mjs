@@ -1915,6 +1915,16 @@ test('skills lint: frontmatter parses, scripts exist, and every script command p
   }
 });
 
+test('/margin:cite with no arguments picks the newest draft like /margin:check and says which (A-26)', () => {
+  const skills = path.join(scripts, '..', 'skills');
+  const cite = fs.readFileSync(path.join(skills, 'cite', 'SKILL.md'), 'utf8');
+  const check = fs.readFileSync(path.join(skills, 'check', 'SKILL.md'), 'utf8');
+  for (const [name, text] of [['check', check], ['cite', cite]]) {
+    assert(/most recently changed file in the drafts folder/.test(text) && /say which one you picked/.test(text), `${name}: the no-argument rule is missing`);
+    assert(text.includes('settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show'), `${name}: the rule should read the drafts setting with settings show`);
+  }
+});
+
 // --- Copy lint (A-27/B-25): nothing the writer can read tells them they are stuck or have stalled ---
 test('copy lint: no text the writer can read says they are stuck or stalled', () => {
   const repo = path.join(here, '..');
