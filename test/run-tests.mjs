@@ -1182,6 +1182,30 @@ test('pause tracker: back after more than a minute away starts a fresh clock; a 
   assert(tracker.isStalled(), 'idle time from before a glance away still counts');
 });
 
+test('settings: suggestBreaks takes yes or no, storyLength flash, short or long; anything else is refused and changes nothing', () => {
+  const dir = project();
+  setUp(dir);
+  const before = fs.readFileSync(marginPath(dir, 'settings.json'), 'utf8');
+  for (const [key, value, hint] of [['suggestBreaks', 'maybe', 'yes or no'], ['suggestBreaks', '', 'yes or no'], ['storyLength', 'epic', 'flash, short or long']]) {
+    const r = run('settings.mjs', ['set', key, value], dir);
+    assert(r.code === 1 && r.out.includes(hint) && r.out.includes('Nothing was changed'), `set ${key} "${value}": ${r.out}`);
+  }
+  assert(fs.readFileSync(marginPath(dir, 'settings.json'), 'utf8') === before, 'a refused value must not touch the file');
+  run('settings.mjs', ['set', 'storyLength', 'Long'], dir);
+  run('settings.mjs', ['set', 'suggestBreaks', 'Off'], dir);
+  const show = run('settings.mjs', ['show'], dir).out;
+  assert(show.includes('storyLength: long') && show.includes('suggestBreaks: false'), show);
+  putMargin(dir, 'settings.json', JSON.stringify({ storyLength: 'epic' }));
+  const shown = run('settings.mjs', ['show'], dir).out;
+  assert(shown.includes('storyLength: short') && shown.includes('ignored storyLength: "epic" (expected flash, short or long)'), shown);
+});
+
+test('the pause skill reads storyLength from the settings and promises no saved place', () => {
+  const text = fs.readFileSync(path.join(scripts, '..', 'skills', 'pause', 'SKILL.md'), 'utf8');
+  assert(text.includes('settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show') && text.includes('`storyLength` setting'), 'reads the setting');
+  assert(!text.includes('place is saved'), 'Claude Code saves no place');
+});
+
 // K4: the break offer backs off by itself once it has been seen (A-15/B-14).
 // Each call runs the offer second by second and returns a string with one
 // letter per second: B shown, . hidden.
@@ -1341,6 +1365,21 @@ await atest('companion: no break offer greets a writer back from more than a min
     world.type('b');
     const again = statusTimeline(world, 4 * 60);
     assert(again === '.17 B7', `writing again, then 3 minutes idle: ${again}`);
+  }));
+
+await atest('companion: "suggest breaks: no" from setup turns the offer off, and a change applies without a reload (A-16/B-21)', () =>
+  withCompanion({ settings: { suggestBreaks: false } }, (world, dir) => {
+    world.type('a');
+    world.tick(4 * 60);
+    assert(!world.status.text.includes('break?'), 'no offer while the project says no');
+    fs.writeFileSync(marginPath(dir, 'settings.json'), JSON.stringify({ suggestBreaks: true }));
+    world.fileChanged('.margin/settings.json');
+    world.tick(1);
+    assert(world.status.text.includes('break?'), 'offered once the project says yes');
+    fs.writeFileSync(marginPath(dir, 'settings.json'), JSON.stringify({ suggestBreaks: false }));
+    world.fileChanged('.margin/settings.json');
+    world.tick(1);
+    assert(!world.status.text.includes('break?'), 'gone again once it says no');
   }));
 
 // The break menu's place-keeping: the spot where the writer was is highlighted

@@ -3,7 +3,7 @@
 //   init     used by /margin:setup: sets Margin up here (keeping earlier answers) and says where
 //   ensure   used first by every other command that changes something: sets Margin up here
 //            if it isn't yet, and prints nothing when it already is
-import { projectDir, scriptArgs, readSettings, writeJsonAtomic, keepAside, rel, isSettingName, DEFAULT_SETTINGS } from './lib.mjs';
+import { projectDir, scriptArgs, readSettings, writeJsonAtomic, keepAside, rel, isSettingName, parseSetting, settingHint, DEFAULT_SETTINGS } from './lib.mjs';
 
 const root = projectDir();
 const [command = 'show', key, ...rest] = scriptArgs();
@@ -27,7 +27,11 @@ if (command === 'show') {
     process.exit(1);
   }
   const raw = rest.join(' ');
-  const value = typeof DEFAULT_SETTINGS[key] === 'boolean' ? ['true', 'yes', 'on', '1'].includes(raw.toLowerCase()) : raw;
+  const value = parseSetting(key, raw);
+  if (value === undefined) {
+    say(`${key} takes ${settingHint(key)}, not "${raw}". Nothing was changed.`);
+    process.exit(1);
+  }
   if (current.state === 'damaged') keepDamagedAside();
   else for (const p of current.problems) say(`Note: ${p}; the default is used instead.`);
   writeJsonAtomic(current.file, { ...current.extra, ...current.settings, [key]: value });

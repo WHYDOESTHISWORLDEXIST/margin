@@ -75,6 +75,21 @@ function activate(context) {
     refresh();
   }
 
+  // Breaks are offered only if both the VS Code setting and the project's own
+  // answer from /margin:setup (suggestBreaks in .margin/settings.json) allow
+  // them. A file that can't be read just now keeps the last answer.
+  let projectAllowsBreaks = true;
+  function loadProjectSettings() {
+    const r = root();
+    if (!r) return;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(r, '.margin', 'settings.json'), 'utf8').replace(/^\uFEFF/, ''));
+      projectAllowsBreaks = !(data && data.suggestBreaks === false);
+    } catch (e) {
+      if (e.code === 'ENOENT') projectAllowsBreaks = true;
+    }
+  }
+
   function saveStatus(id, statusValue) {
     const file = notesFile();
     try {
@@ -133,7 +148,7 @@ function activate(context) {
     const shown = notes.filter((n) => revealed.has(n.id)).length;
     const held = notes.length - shown;
     const editor = vscode.window.activeTextEditor;
-    const stalled = Boolean(config().get('suggestBreaks') && editor && watched(editor.document) && tracker.isStalled());
+    const stalled = Boolean(config().get('suggestBreaks') && projectAllowsBreaks && editor && watched(editor.document) && tracker.isStalled());
     if (offer.update(stalled, windowFocused)) {
       setStatus({
         text: '$(coffee) Margin · break?',
@@ -187,14 +202,18 @@ function activate(context) {
 
   context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => paint()));
 
-  // Notes file.
+  // Margin's files: the notes queue, and the project's settings.
   const r = root();
-  if (r) {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(r, '.margin/suggestions.json'));
-    watcher.onDidChange(loadNotes);
-    watcher.onDidCreate(loadNotes);
-    watcher.onDidDelete(loadNotes);
+  function watch(name, onChange) {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(r, `.margin/${name}`));
+    watcher.onDidChange(onChange);
+    watcher.onDidCreate(onChange);
+    watcher.onDidDelete(onChange);
     context.subscriptions.push(watcher);
+  }
+  if (r) {
+    watch('suggestions.json', loadNotes);
+    watch('settings.json', loadProjectSettings);
   }
 
   // Cheap checks once a second; refresh() only touches the UI when something changed.
@@ -284,6 +303,7 @@ function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand('margin.showNow', revealHeld));
 
+  loadProjectSettings();
   loadNotes();
 }
 

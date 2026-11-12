@@ -276,6 +276,28 @@ export const DEFAULT_SETTINGS = {
 
 export const isSettingName = (key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key);
 
+// Settings that take one of a few words.
+export const SETTING_CHOICES = { storyLength: ['flash', 'short', 'long'] };
+const YES = ['true', 'yes', 'on', '1'];
+const NO = ['false', 'no', 'off', '0'];
+
+// What a setting takes, in words: "yes or no", "flash, short or long", "text".
+export function settingHint(key) {
+  if (typeof DEFAULT_SETTINGS[key] === 'boolean') return 'yes or no';
+  const choices = SETTING_CHOICES[key];
+  return choices ? `${choices.slice(0, -1).join(', ')} or ${choices[choices.length - 1]}` : 'text';
+}
+
+// The value to save for a typed answer, or undefined when the setting doesn't take it.
+export function parseSetting(key, raw) {
+  const word = String(raw).trim().toLowerCase();
+  if (typeof DEFAULT_SETTINGS[key] === 'boolean') return YES.includes(word) ? true : NO.includes(word) ? false : undefined;
+  if (SETTING_CHOICES[key]) return SETTING_CHOICES[key].includes(word) ? word : undefined;
+  return String(raw);
+}
+
+const settingOk = (key, value) => typeof value === typeof DEFAULT_SETTINGS[key] && (!SETTING_CHOICES[key] || SETTING_CHOICES[key].includes(value));
+
 // { state: 'missing' | 'ok' | 'damaged', settings, problems, extra }
 // settings always holds every known key with a value of the right type; a
 // value of the wrong type is ignored (and named in problems). extra keeps keys
@@ -292,8 +314,8 @@ export function readSettings(root) {
   }
   for (const [key, value] of Object.entries(r.value)) {
     if (!isSettingName(key)) extra[key] = value;
-    else if (typeof value === typeof DEFAULT_SETTINGS[key]) settings[key] = value;
-    else problems.push(`ignored ${key}: ${JSON.stringify(value)} (expected ${typeof DEFAULT_SETTINGS[key] === 'boolean' ? 'yes or no' : 'text'})`);
+    else if (settingOk(key, value)) settings[key] = value;
+    else problems.push(`ignored ${key}: ${JSON.stringify(value)} (expected ${settingHint(key)})`);
   }
   return { state: 'ok', file, settings, problems, extra };
 }
