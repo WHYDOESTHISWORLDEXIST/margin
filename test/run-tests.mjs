@@ -940,6 +940,22 @@ test('path comparisons follow the drive, not the OS: a macOS-style run on a driv
   assert(res.stdout.trim() === `false ${driveIgnoresCase(dir)}`, `expected "false ${driveIgnoresCase(dir)}": ${res.stdout}${res.stderr}`);
 });
 
+// A2-11/B2-11: remove follows the drive's case rule and says when a name isn't listed.
+test('focus remove matches names as the drive does and says when one isn\'t in the list (A2-11/B2-11)', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts', 'notes'], dir);
+  const stored = () => JSON.parse(readText(marginPath(dir, 'focus.json'))).paths.join();
+  const upper = run('focus.mjs', ['remove', 'DRAFTS'], dir);
+  if (driveIgnoresCase(dir)) {
+    assert(stored() === 'notes' && !upper.out.includes('Not in the list'), `DRAFTS is drafts on this drive: ${upper.out}`);
+  } else {
+    assert(stored() === 'drafts,notes' && upper.out.includes('Not in the list: DRAFTS.'), `DRAFTS is another name on this drive: ${upper.out}`);
+  }
+  const before = fs.statSync(marginPath(dir, 'focus.json')).mtimeMs;
+  const none = run('focus.mjs', ['remove', 'chapters'], dir);
+  assert(none.code === 0 && none.out.startsWith('Not in the list: chapters.') && fs.statSync(marginPath(dir, 'focus.json')).mtimeMs === before, `${none.out}`);
+});
+
 // --- Shell commands under focus (A-04/B-04, K7) ---
 
 const shellCheck = await import(pathToFileURL(path.join(scripts, 'shell-check.mjs')).href);

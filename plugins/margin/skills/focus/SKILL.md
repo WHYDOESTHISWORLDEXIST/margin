@@ -23,7 +23,7 @@ For example, `/margin:focus add old drafts/ch 1.md notes` becomes `add "old draf
 
 Commands: `status`, `add <path...>`, `remove <path...>`, `on`, `off`, `clear`. Adding the first path turns focus on automatically.
 
-Two messages need a word from you. If `add` says `Not found … Nothing was added`, tell the writer in one line which names weren't found; focus is unchanged. If any command begins by saying the focus list was damaged and repaired, keep that message: until the repair, Claude's reading was paused (never its edits), and a copy of the old list is kept in `.margin/`.
+Three messages need a word from you. If `add` says `Not found … Nothing was added`, tell the writer in one line which names weren't found; focus is unchanged. If `remove` says `Not in the list: …`, those names weren't in the list, so nothing changed for them. If any command begins by saying the focus list was damaged and repaired, keep that message: until the repair, Claude's reading was paused (never its edits), and a copy of the old list is kept in `.margin/`.
 
 ## If they gave nothing, or described it in words
 

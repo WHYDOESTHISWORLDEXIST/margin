@@ -3,7 +3,7 @@
 // A damaged focus list is repaired first (a copy is kept), whatever the command.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel, onDiskSpelling } from './lib.mjs';
+import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel, onDiskSpelling, sameFile } from './lib.mjs';
 
 const root = projectDir();
 const [command = 'status', ...items] = scriptArgs();
@@ -80,9 +80,15 @@ switch (command) {
     break;
   }
   case 'remove': {
-    const drop = new Set(rejoin(items, (p) => focus.paths.includes(rel(root, p))).map((i) => rel(root, i)));
-    focus.paths = focus.paths.filter((p) => !drop.has(p));
-    saveFocus(root, focus);
+    // Names are compared the way the drive compares them ("Drafts" is "drafts" where
+    // case doesn't matter), and a name that matches nothing is said so.
+    const listed = (p) => focus.paths.some((q) => sameFile(root, q, rel(root, p)));
+    const names = rejoin(items, listed);
+    const missing = names.filter((name) => !listed(name));
+    const before = focus.paths.length;
+    focus.paths = focus.paths.filter((q) => !names.some((name) => sameFile(root, q, rel(root, name))));
+    if (missing.length) say(`Not in the list: ${missing.join(', ')}.`);
+    if (focus.paths.length !== before) saveFocus(root, focus);
     show();
     break;
   }
