@@ -1634,6 +1634,16 @@ test('a relative Grep path is resolved against the hook’s folder, not the proj
   assert(grep(path.join(dir, 'drafts'), '..').includes('"deny"'), 'the parent of the focused folder is the whole project');
 });
 
+// A2-10: a Grep with no path searches the folder it runs in.
+test('a Grep with no path is judged by the folder it runs in (A2-10)', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const grep = (cwd) => run('guard.mjs', [], dir, { cwd, tool_name: 'Grep', tool_input: { pattern: 'x' }, tool_use_id: 'toolu_g0', hook_event_name: 'PreToolUse' }).out;
+  assert(grep(path.join(dir, 'drafts')) === '', 'inside the focused folder: allowed');
+  assert(grep(path.join(dir, 'notes')).includes('"deny"'), 'in a folder outside the list: denied');
+  assert(grep(dir).includes('"deny"'), 'at the project root: the whole project, denied');
+});
+
 // B-19: running /margin:check again must not repeat notes or revive dismissed ones.
 test('a note that is already queued or dismissed is not added again, and the counts say so (B-19)', () => {
   const dir = project();
