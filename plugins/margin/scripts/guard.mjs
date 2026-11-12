@@ -35,6 +35,10 @@ function deny(reason) {
 
 // Read and Grep only reach what the focus list allows (lib.focusRules, shared
 // with the shell guard). A Grep without a path searches the whole project.
+// A relative Grep path is relative to the folder the tool runs in (the hook's cwd,
+// which can be a subfolder after a cd), not to the project root.
+const hookCwd = typeof input.cwd === 'string' && input.cwd.trim() ? path.resolve(input.cwd) : root;
+
 function checkFocus() {
   if (!hasFocus || !READ_TOOLS.includes(tool)) return;
   const focus = readFocus(root);
@@ -42,7 +46,7 @@ function checkFocus() {
   const rules = focusRules(root, input, focus);
   const reason = tool === 'Read'
     ? (args.file_path ? rules.reasonFor(path.resolve(root, args.file_path)) : null)
-    : rules.searchReasonFor(args.path ? path.resolve(root, args.path) : root);
+    : rules.searchReasonFor(args.path ? path.resolve(hookCwd, args.path) : root);
   if (reason) deny(reason);
 }
 

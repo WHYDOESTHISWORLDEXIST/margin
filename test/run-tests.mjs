@@ -1502,5 +1502,18 @@ test('if a backup can\u2019t be made the guard asks instead of crashing or stayi
   assert(fs.existsSync(marginPath(dir, 'errors.jsonl')), 'the failure is recorded');
 });
 
+// B-22: a relative Grep path means what the tool means: relative to its folder.
+test('a relative Grep path is resolved against the hook’s folder, not the project root (B-22)', () => {
+  const dir = project();
+  fs.mkdirSync(path.join(dir, 'notes', 'drafts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'notes', 'drafts', 'x.md'), 'x\n');
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const grep = (cwd, p) => run('guard.mjs', [], dir, { cwd, tool_name: 'Grep', tool_input: { pattern: 'x', path: p }, tool_use_id: 'toolu_g', hook_event_name: 'PreToolUse' }).out;
+  assert(grep(path.join(dir, 'notes'), 'drafts').includes('"deny"'), 'notes/drafts is not in the focus list');
+  assert(grep(path.join(dir, 'drafts'), '.') === '', 'the focused folder itself, searched from inside it');
+  assert(grep(dir, 'drafts') === '', 'from the project root it still works');
+  assert(grep(path.join(dir, 'drafts'), '..').includes('"deny"'), 'the parent of the focused folder is the whole project');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
