@@ -3,12 +3,25 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // node:crypto is only needed after an edit, so hooks that run on every read or
 // prompt don't pay for loading it.
 const requireBuiltin = createRequire(import.meta.url);
 
 export const IS_WINDOWS = process.platform === 'win32';
+
+// Whether the module at `moduleUrl` is the script node was started with. Both
+// sides are compared where they really point: Node follows links (symlinks,
+// Windows junctions) for a module's own URL but keeps process.argv[1] as typed,
+// so a plugin reached through a link would otherwise never run its main().
+export function isMainModule(moduleUrl) {
+  if (!process.argv[1]) return false;
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const invoked = real(path.resolve(process.argv[1]));
+  const self = real(fileURLToPath(moduleUrl));
+  return IS_WINDOWS || process.platform === 'darwin' ? invoked.toLowerCase() === self.toLowerCase() : invoked === self;
+}
 
 // ---------------------------------------------------------------------------
 // Reading and writing Margin's own files.

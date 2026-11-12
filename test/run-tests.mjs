@@ -1141,6 +1141,28 @@ test('inventory reads only files that share a size with another file, and finds 
   assert(readBytes.get(tailA.full) === 65536 + 200000 && readBytes.get(same1.full) === 65536 + 300000, 'same start: the whole file is compared');
 });
 
+// A2-02/B2-01: a plugin reached through a link (a symlinked ~/.claude, --plugin-dir on a
+// linked folder, macOS /tmp) still runs inventory and cite-check. The link points at a
+// copy of the plugin, never at the repo, and is removed first.
+test('inventory and cite-check still report when the plugin path goes through a link (A2-02/B2-01)', () => {
+  const dir = project();
+  const holder = fs.mkdtempSync(path.join(os.tmpdir(), 'margin link '));
+  made.push(holder);
+  const copy = path.join(holder, 'real plugin');
+  fs.cpSync(path.join(scripts, '..'), copy, { recursive: true });
+  const link = path.join(holder, 'linked plugin');
+  fs.symlinkSync(copy, link, 'junction');   // a junction on Windows (no admin rights needed), a symlink elsewhere
+  try {
+    const viaLink = (script, args) => spawnSync(process.execPath, [path.join(link, 'scripts', script), '--project', dir, ...args], { cwd: dir, encoding: 'utf8', input: '' });
+    const inv = viaLink('inventory.mjs', []);
+    assert(inv.status === 0 && inv.stdout.includes('Project:') && inv.stdout.includes('drafts/ch3.md'), `inventory through a link: ${JSON.stringify(inv.stdout)} ${inv.stderr}`);
+    const cite = viaLink('cite-check.mjs', ['drafts/ch3.md']);
+    assert(cite.status === 0 && JSON.parse(cite.stdout).unresolved[0].key === 'smtih2020', `cite-check through a link: ${JSON.stringify(cite.stdout)} ${cite.stderr}`);
+  } finally {
+    fs.unlinkSync(link);
+  }
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });

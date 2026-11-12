@@ -11,8 +11,7 @@
 // mention rather than a citation).
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { projectDir, scriptArgs, loadSettings, rel, stripBom } from './lib.mjs';
+import { projectDir, scriptArgs, loadSettings, rel, stripBom, isMainModule } from './lib.mjs';
 
 // --------------------------------------------------------------------------
 // BibTeX: a small scanner that follows braces, so an entry's end is its
@@ -327,6 +326,4 @@ function main() {
   console.log(JSON.stringify(report, null, 2));
 }
 
-const invokedAs = process.argv[1] ? path.resolve(process.argv[1]) : '';
-const self = fileURLToPath(import.meta.url);
-if (process.platform === 'win32' ? invokedAs.toLowerCase() === self.toLowerCase() : invokedAs === self) main();
+if (isMainModule(import.meta.url)) main();

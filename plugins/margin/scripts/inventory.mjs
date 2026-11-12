@@ -4,8 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { projectDir, scriptArgs, rel, isInside, realPath } from './lib.mjs';
+import { projectDir, scriptArgs, rel, isInside, realPath, isMainModule } from './lib.mjs';
 
 // Folders that hold tools' files, not the writer's: skipped.
 const SKIP = new Set(['.git', 'node_modules', '.margin', '.obsidian', '.vscode', '.trash', '.idea', '.venv', 'venv', '__pycache__', 'dist', 'build']);
@@ -137,6 +136,4 @@ function main() {
   if (files.length > MAX_LIST) console.log(`... and ${files.length - MAX_LIST} more. Run again on a subfolder to see them.`);
 }
 
-const invokedAs = process.argv[1] ? path.resolve(process.argv[1]) : '';
-const self = fileURLToPath(import.meta.url);
-if (process.platform === 'win32' ? invokedAs.toLowerCase() === self.toLowerCase() : invokedAs === self) main();
+if (isMainModule(import.meta.url)) main();
