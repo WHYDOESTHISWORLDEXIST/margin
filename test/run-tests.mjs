@@ -1164,5 +1164,56 @@ test('pause tracker: mostly deleting for minutes reads as stalled; reading does 
   assert(tracker.isStalled(), 'write-delete churn should read as stalled');
 });
 
+// --- The VS Code companion, run unchanged against a mock of the VS Code API (A-33) ---
+
+const { createWorld, EXTENSION_DIR } = require('./vscode-mock.cjs');
+
+async function atest(name, fn) {
+  try { await fn(); passed++; console.log(`ok   ${name}`); }
+  catch (e) { failed++; console.log(`FAIL ${name}\n     ${e.message}`); }
+}
+
+const companionNote = (id, file, line, kind = 'citation') => ({ id, file, line, kind, message: `Note ${id}.`, status: 'open' });
+function writeNotes(dir, notes) {
+  fs.mkdirSync(path.join(dir, '.margin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.margin', 'suggestions.json'), JSON.stringify({ version: 1, items: notes }));
+}
+// Runs fn(world, dir) with the companion active in a fresh project; the fake
+// clock is always put back.
+async function withCompanion({ notes = [], settings, docs, config } = {}, fn) {
+  const dir = project();
+  writeNotes(dir, notes);
+  if (settings) fs.writeFileSync(path.join(dir, '.margin', 'settings.json'), JSON.stringify(settings));
+  const world = createWorld({ root: dir, docs, config });
+  try {
+    world.activate();
+    await fn(world, dir);
+  } finally {
+    world.dispose();
+  }
+}
+
+await atest('companion: activates, registers every command it contributes, and reads only settings it declares', () => withCompanion({}, (world) => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(EXTENSION_DIR, 'package.json'), 'utf8'));
+  const contributed = pkg.contributes.commands.map((c) => c.command).sort();
+  assert(JSON.stringify(Object.keys(world.commands).sort()) === JSON.stringify(contributed), `registered ${Object.keys(world.commands)}, contributed ${contributed}`);
+  world.tick(5);
+  const declared = Object.keys(pkg.contributes.configuration.properties);
+  const undeclared = [...world.log.settingsRead].filter((k) => !declared.includes(k));
+  assert(world.log.settingsRead.size && !undeclared.length, `undeclared settings read: ${undeclared}`);
+}));
+
+await atest('companion: a queued note waits for a pause, then shows as a dot on its line, in its own file only', () =>
+  withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5)], docs: ['drafts/ch3.md', 'notes/interviews.md'] }, (world) => {
+    const [draft, notes] = world.editors;
+    for (let i = 0; i < 4; i++) { world.type('a'); world.tick(3); }
+    assert(!world.dots(draft).length, 'a note must wait while the writer is typing');
+    assert(/1 held until your next pause/.test(world.status.tooltip), world.status.tooltip);
+    world.tick(9);
+    assert(JSON.stringify(world.dots(draft)) === '[4]', `dots in the draft: ${world.dots(draft)}`);
+    assert(!world.dots(notes).length, 'no dot in another file');
+    assert(world.status.text === '$(circle-small-filled) Margin · 1', world.status.text);
+  }));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
