@@ -9,7 +9,7 @@
 // (never its edits) with a message saying how to repair it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, focusRules, isInside, rel, writeJson, appendLine, newSnapshot } from './lib.mjs';
+import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, focusRules, isInside, rel, writeJson, appendLine, newSnapshot, realPath, fileKey } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -20,6 +20,7 @@ if (!hasFocus && !setUp) process.exit(0);
 const tool = input.tool_name || '';
 const args = input.tool_input || {};
 const READ_TOOLS = ['Read', 'Grep'];
+const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
 function deny(reason) {
   process.stdout.write(JSON.stringify({
@@ -45,8 +46,22 @@ function checkFocus() {
   if (reason) deny(reason);
 }
 
+// Margin's own files (focus list, settings, change log, backups) are changed
+// through its commands, which run as node scripts. Editing them with Claude's
+// file tools could switch focus off or damage the undo log without a trace. The
+// one file a skill writes that way is the organize plan.
+function protectMargin() {
+  if (!EDIT_TOOLS.includes(tool)) return;
+  const file = args.file_path || args.notebook_path;
+  if (typeof file !== 'string' || !file) return;
+  const target = path.resolve(root, file);
+  if (!isInside(realPath(target), realPath(marginDir(root)))) return;
+  if (fileKey(root, realPath(target)) === fileKey(root, realPath(path.join(marginDir(root), 'plan.json')))) return;
+  deny("Margin's own files are changed with its commands (/margin:focus, /margin:review, /margin:setup), not edited directly. Ask the writer to run the command.");
+}
+
 function backUp() {
-  if (!setUp || !['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) return;
+  if (!setUp || !EDIT_TOOLS.includes(tool)) return;
   const file = args.file_path || args.notebook_path;
   if (!file) return;
   const target = path.resolve(root, file);
@@ -68,6 +83,7 @@ function backUp() {
 try {
   if (process.env.MARGIN_TEST_FAIL === 'guard') throw new Error('simulated failure (test only)');
   checkFocus();
+  protectMargin();
   backUp();
 } catch (err) {
   // Never fail open without a trace: keep reads paused while a focus list

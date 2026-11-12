@@ -1441,5 +1441,23 @@ await atest('companion: a note matches its file whatever the case on Windows and
     assert(world.status.text === (ignoresCase ? '$(circle-small-filled) Margin · 1' : '$(circle-small) Margin'), `status: ${world.status.text}`);
   }));
 
+// B-05: Claude's file tools can't change Margin's own files.
+test('Edit, Write and NotebookEdit into .margin are denied, except the organize plan (B-05)', () => {
+  const dir = project();
+  run('focus.mjs', ['add', 'drafts'], dir);
+  setUp(dir);
+  for (const tool of ['Edit', 'Write']) {
+    for (const name of ['focus.json', 'settings.json', 'log.jsonl', 'history/x.md']) {
+      const out = hook(dir, tool, { file_path: path.join(dir, '.margin', ...name.split('/')) }, 'toolu_b05');
+      assert(out.out.includes('"deny"') && out.out.includes('/margin:focus'), `${tool} ${name}: ${out.out}`);
+    }
+  }
+  assert(hook(dir, 'NotebookEdit', { notebook_path: path.join(dir, '.margin', 'focus.json') }, 'toolu_b05').out.includes('"deny"'), 'NotebookEdit should be denied');
+  assert(hook(dir, 'Write', { file_path: path.join(dir, '.margin', 'plan.json') }, 'toolu_plan').out === '', 'the organize plan may be written');
+  assert(hook(dir, 'Write', { file_path: path.join(dir, 'drafts', 'new.md') }, 'toolu_new').out === '', 'project files are unaffected');
+  assert(JSON.parse(fs.readFileSync(marginPath(dir, 'focus.json'), 'utf8')).enabled === true, 'focus.json untouched');
+  assert(run('focus.mjs', ['off'], dir).code === 0 && JSON.parse(fs.readFileSync(marginPath(dir, 'focus.json'), 'utf8')).enabled === false, 'Margin\u2019s own script still writes it');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
