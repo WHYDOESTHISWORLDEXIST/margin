@@ -993,7 +993,11 @@ const SHELL_TABLE = [
   // xargs -a, fd -x, awk programs that open files.
   ['bash', 'xargs -a notes/private.md echo', 'deny'], ['bash', 'xargs -a drafts/ch3.md echo', 'allow'],
   ['bash', 'fd -e md -x cat {}', 'deny'], ['bash', 'fd -x cat', 'deny'], ['bash', 'fd -e md', 'allow'], ['bash', 'fd -e md . drafts -x cat {}', 'allow'],
-  ['bash', "awk 'BEGIN{while((getline l < \"notes/private.md\")>0) print l}'", 'ask'], ['bash', "awk '{print $1}' drafts/ch3.md", 'allow']
+  ['bash', "awk 'BEGIN{while((getline l < \"notes/private.md\")>0) print l}'", 'ask'], ['bash', "awk '{print $1}' drafts/ch3.md", 'allow'],
+  // A2-04: PowerShell switch aliases and abbreviations (gci -r is -Recurse).
+  ['powershell', 'gci -r drafts | sls mill', 'allow'], ['powershell', 'ls drafts -r -Filter *.md | sls mill', 'allow'],
+  ['powershell', 'Get-ChildItem -Rec -Path drafts | Select-String mill', 'allow'], ['powershell', 'gci -af -r drafts | sls mill', 'allow'],
+  ['powershell', 'gci -r | sls mill', 'deny'], ['powershell', 'gci -s notes | sls mill', 'deny']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

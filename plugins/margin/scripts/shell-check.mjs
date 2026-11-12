@@ -91,6 +91,12 @@ for (const alias of ['egrep', 'fgrep', 'zgrep']) OPT_VALUES[alias] = OPT_VALUES.
 for (const alias of ['gawk', 'mawk', 'nawk']) OPT_VALUES[alias] = OPT_VALUES.awk;
 const PS_SWITCHES = new Set(['-recurse', '-file', '-directory', '-force', '-name', '-hidden', '-readonly', '-system', '-followsymlink',
   '-raw', '-wait', '-asbytestream', '-simplematch', '-casesensitive', '-quiet', '-list', '-notmatch', '-allmatches', '-container', '-passthru']);
+// The aliases PowerShell defines for those switches: Get-ChildItem's -s (-Recurse),
+// -ad/-d (-Directory), -af (-File), -ah/-h (-Hidden), -ar (-ReadOnly), -as (-System).
+const PS_SWITCH_ALIASES = new Set(['-s', '-ad', '-d', '-af', '-ah', '-h', '-ar', '-as']);
+// PowerShell also takes the start of a parameter name: -r or -rec for -Recurse, -fo for -Force.
+const isPsSwitch = (name) => PS_SWITCHES.has(name) || PS_SWITCH_ALIASES.has(name) ||
+  ((name === '-r' || name.length > 2) && [...PS_SWITCHES].some((s) => s.startsWith(name)));
 const PS_PATH_PARAMS = new Set(['-path', '-literalpath', '-pspath', '-lp']);
 
 // --------------------------------------------------------------------------
@@ -766,7 +772,7 @@ function psArgs(args) {
     if (m) {
       const name = m[1].toLowerCase();
       if (m[2] !== undefined) { (named[name] ||= []).push({ ...w, text: m[2] }); continue; }
-      if (PS_SWITCHES.has(name)) continue;
+      if (isPsSwitch(name)) continue;
       if (args[k + 1]) { (named[name] ||= []).push(args[k + 1]); k++; }
       continue;
     }
