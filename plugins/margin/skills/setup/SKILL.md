@@ -17,7 +17,7 @@ Help the writer set up Margin in a minute or two. They should never have to open
    - Where do drafts live? (setting `drafts`)
    - Where do notes live? (setting `notes`)
    - Which bibliography file, if any? A Zotero "Better BibTeX" export works best. (setting `bibliography`)
-   - Should Margin suggest breaks, like a short walk or story, when they seem stuck? (setting `suggestBreaks`)
+   - Should Margin quietly offer a short break, like a walk or a story, after a long quiet stretch in the editor? (setting `suggestBreaks`)
 4. Save each answer:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" set <key> <value>`
 5. Finish with a short welcome that lists what they can do now, one line each:
@@ -25,7 +25,7 @@ Help the writer set up Margin in a minute or two. They should never have to open
    - `/margin:organize` to tidy folders (nothing moves without their OK, and moves can be undone)
    - `/margin:check` to look for contradictions and missing citations
    - `/margin:cite` to check citations against their library
-   - `/margin:pause` for a short break when stuck
+   - `/margin:pause` for a short break whenever they want one
    - `/margin:review` to see and undo anything Claude changed
 
 Mention once that `.margin/` holds Margin's settings, backups and notes, and they may want to add it to `.gitignore`. Don't change `.gitignore` yourself unless they say so.

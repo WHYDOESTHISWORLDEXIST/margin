@@ -11,7 +11,7 @@ Margin helps while you write without getting in the way. It never pops up, never
 | `/margin:organize` | Proposes a tidy folder layout, moves files only after you approve, and `undo` puts them back |
 | `/margin:check` | Checks a draft against your earlier notes for contradictions, missing citations and loose ends, as margin notes |
 | `/margin:cite` | Checks citation keys against your Zotero (Better BibTeX) library and fixes typos with your OK. Never invents a source |
-| `/margin:pause` | A short break when you're stuck: a very short story, a walk, something quiet, or a minute of noticing |
+| `/margin:pause` | A short break whenever you want one: a very short story, a walk, something quiet, or a minute of noticing |
 | `/margin:review` | Everything Claude changed, with one-step undo, plus your open margin notes |
 
 ## Install in Claude Code

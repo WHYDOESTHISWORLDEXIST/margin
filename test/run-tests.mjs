@@ -1915,5 +1915,34 @@ test('skills lint: frontmatter parses, scripts exist, and every script command p
   }
 });
 
+// --- Copy lint (A-27/B-25): nothing the writer can read tells them they are stuck or have stalled ---
+test('copy lint: no text the writer can read says they are stuck or stalled', () => {
+  const repo = path.join(here, '..');
+  const files = [
+    'README.md',
+    '.claude-plugin/marketplace.json',
+    'plugins/margin/.claude-plugin/plugin.json',
+    'vscode-extension/package.json',
+    ...fs.readdirSync(path.join(repo, 'plugins', 'margin', 'skills')).map((n) => `plugins/margin/skills/${n}/SKILL.md`)
+  ];
+  // Internal names such as stuckMinutes stay: the patterns need a word boundary.
+  const banned = /\b(?:stuck|unstuck|stall|stalls|stalled|stalling)\b/i;
+  const phrases = /\bseems? (?:to be )?(?:stuck|stalled|struggling)\b|\byou(?:'|’)?(?:re| are| have been|'ve been) (?:stuck|stalled|struggling)\b/i;
+  const check = (where, text) => {
+    for (const [i, line] of text.split(/\r?\n/).entries()) {
+      assert(!banned.test(line) && !phrases.test(line), `${where}:${i + 1} blames the writer: ${line.trim()}`);
+    }
+  };
+  for (const f of files) check(f, fs.readFileSync(path.join(repo, f), 'utf8'));
+  // In the companion, only the strings it shows (not identifiers or comments).
+  const shown = fs.readFileSync(path.join(repo, 'vscode-extension', 'extension.js'), 'utf8').match(/'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/g) || [];
+  check('vscode-extension/extension.js (strings)', shown.join('\n'));
+  // The check itself catches the phrases it exists for.
+  for (const bad of ['when you seem stuck', "you're stuck", 'you’ve been stuck a while', 'if you have stalled', 'a break when stuck', 'help getting unstuck']) {
+    assert(banned.test(bad) || phrases.test(bad), `the lint should catch: ${bad}`);
+  }
+  assert(!banned.test('margin.stuckMinutes') && !banned.test('const stuckMs'), 'internal names are allowed');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

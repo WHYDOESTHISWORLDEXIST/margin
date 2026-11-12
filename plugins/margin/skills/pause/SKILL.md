@@ -1,6 +1,6 @@
 ---
 name: pause
-description: Offer a short break when the writer feels stuck, with a choice of a very short story, a walk, something quiet, or a minute of noticing. Use only when the writer runs /margin:pause or asks for a break, a story, or help getting unstuck.
+description: Offer a short break, with a choice of a very short story, a walk, something quiet, or a minute of noticing. Use only when the writer runs /margin:pause or asks for a break or a story.
 argument-hint: "[story | walk | quiet | notice] [setting: ...] [symbol: ...] [flash | short | long]"
 disable-model-invocation: true
 allowed-tools: Bash(node *), PowerShell(node *)
@@ -10,7 +10,7 @@ allowed-tools: Bash(node *), PowerShell(node *)
 
 The writer typed: `$ARGUMENTS`
 
-Breaks work best when they're light and don't use words much, and when the writer chooses them. Never say "you seem stuck", never lecture about productivity, and keep everything short.
+Breaks work best when they're light and don't use words much, and when the writer chooses them. Never comment on how the writer is getting on, never lecture about productivity, and keep everything short.
 
 ## If they didn't pick
 
