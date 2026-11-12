@@ -348,12 +348,36 @@ test('a --project value that was never filled in is ignored', () => {
   assert(marginDirsIn(dir).join() === '.', 'no new .margin should appear');
 });
 
-test('hooks started in a subfolder use the .margin of the project above it', () => {
+test('a project folder Claude Code names is the project, even inside a folder with its own .margin (A2-01)', () => {
   const dir = project();
   run('focus.mjs', ['add', 'drafts'], dir);
-  const res = hookWithProjectDir(path.join(dir, 'drafts'), path.join(dir, 'drafts'), 'Read', { file_path: path.join(dir, 'notes/private.md') });
-  assert(JSON.parse(res.out).hookSpecificOutput.permissionDecision === 'deny', `the root focus list should apply: ${res.out}${res.err}`);
-  assert(marginDirsIn(dir).join() === '.', 'no .margin should appear in the subfolder');
+  // A session whose project is the subfolder drafts/ is its own project, as the companion sees it.
+  const res = hookWithProjectDir(path.join(dir, 'drafts'), path.join(dir, 'drafts'), 'Read', { file_path: path.join(dir, 'drafts', 'ch3.md') });
+  assert(res.code === 0 && res.out === '', `the parent's focus list should not apply: ${res.out}${res.err}`);
+  assert(marginDirsIn(dir).join() === '.', 'a hook must not create a .margin in the subfolder');
+});
+
+test('a project opened inside a folder where Margin was used gets its own .margin (A2-01)', () => {
+  const writing = project();
+  run('settings.mjs', ['init'], writing);
+  fs.mkdirSync(path.join(writing, 'essays'));
+  run('focus.mjs', ['add', 'essays'], writing);
+  const novel = path.join(writing, 'Novel');
+  fs.mkdirSync(path.join(novel, 'drafts'), { recursive: true });
+  fs.writeFileSync(path.join(novel, 'drafts', 'ch3.md'), 'The mills closed in 1871 [@smtih2020].\n');
+  fs.copyFileSync(path.join(writing, 'sources', 'library.bib'), path.join(novel, 'library.bib'));
+  // As the skills run them in Novel: --project names Novel, CLAUDE_PROJECT_DIR isn't set.
+  const skill = (script, args) => shellRun(script, ['--project', novel, ...args], novel);
+  const setup = skill('settings.mjs', ['init']);
+  assert(setup.out.includes(novel) && fs.existsSync(path.join(novel, '.margin', 'settings.json')), `setup should set Novel up: ${setup.out}`);
+  assert(skill('focus.mjs', ['add', 'drafts']).out.includes('- drafts'), 'paths are relative to Novel');
+  const read = hookWithProjectDir(novel, novel, 'Read', { file_path: path.join(novel, 'drafts', 'ch3.md') });
+  assert(read.out === '', `Novel's own focus list applies, not the parent's: ${read.out}`);
+  skill('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--line', '1', '--kind', 'todo', '--message', 'Check the year.']);
+  assert(JSON.parse(fs.readFileSync(path.join(novel, '.margin', 'suggestions.json'), 'utf8')).items[0].file === 'drafts/ch3.md', 'the note is in Novel, where the companion looks');
+  assert(!fs.existsSync(path.join(writing, '.margin', 'suggestions.json')), 'nothing is filed in the parent');
+  const cite = skill('cite-check.mjs', ['drafts/ch3.md']);
+  assert(cite.code === 0 && JSON.parse(cite.out).unresolved[0].key === 'smtih2020', `cite-check reads Novel's draft: ${cite.out}${cite.err}`);
 });
 
 test('with no .margin anywhere, a new one goes at the folder with .git, else the current folder', () => {

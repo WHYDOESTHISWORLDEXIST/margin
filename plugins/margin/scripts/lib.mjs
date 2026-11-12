@@ -230,19 +230,20 @@ function findUp(start, test) {
 export const hasMarginMarker = (dir) =>
   fs.existsSync(path.join(dir, '.margin', 'settings.json')) || fs.existsSync(path.join(dir, '.margin', 'focus.json'));
 
-// The project folder, in this order:
-// 1. CLAUDE_PROJECT_DIR (hooks get it), else --project (skills pass it), else the
-//    hook's cwd or the current folder; from there,
-// 2. the nearest folder at or above it that already has Margin set up
-//    (.margin/settings.json or .margin/focus.json), so a second .margin is never
-//    made below one that exists;
-// 3. otherwise the folder from step 1 if it was given explicitly, else the nearest
-//    folder with .git, else the current folder.
+// The project folder:
+// 1. the folder Claude Code names, when there is one: CLAUDE_PROJECT_DIR (hooks get
+//    it), else --project (skills pass it). It is the project even inside a folder
+//    that has its own .margin, the way Claude Code and the VS Code companion see it.
+// 2. Only when no folder was named (a script run by hand, or a placeholder that was
+//    never filled in), from the hook's cwd or the current folder: the nearest folder
+//    at or above it that already has Margin set up (.margin/settings.json or
+//    .margin/focus.json), so a second .margin isn't made below one that exists;
+//    else the nearest folder with .git; else the current folder.
 export function projectDir(input = {}) {
   if (projectFlag === undefined) scriptArgs();
   const explicit = usableDir(process.env.CLAUDE_PROJECT_DIR) || usableDir(projectFlag);
-  const start = explicit || usableDir(input.cwd) || path.resolve(process.cwd());
-  const root = findUp(start, hasMarginMarker) || explicit || findUp(start, (dir) => fs.existsSync(path.join(dir, '.git'))) || start;
+  const start = usableDir(input.cwd) || path.resolve(process.cwd());
+  const root = explicit || findUp(start, hasMarginMarker) || findUp(start, (dir) => fs.existsSync(path.join(dir, '.git'))) || start;
   learnCaseRule(root);
   return root;
 }
