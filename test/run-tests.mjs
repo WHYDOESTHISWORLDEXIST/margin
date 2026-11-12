@@ -969,7 +969,31 @@ const SHELL_TABLE = [
   ['powershell', 'powershell -Command "Get-Content notes\\private.md"', 'deny'], ['powershell', '$f = "notes\\private.md"; Get-Content $f', 'deny'],
   ['powershell', 'findstr /s mill *.md', 'deny'],
   ['powershell', 'Get-ChildItem drafts | ForEach-Object { Get-Content $_ }', 'ask'], ['powershell', 'Get-Content (Join-Path notes private.md)', 'ask'],
-  ['powershell', 'node -e "console.log(require(\'fs\').readFileSync(\'notes/private.md\',\'utf8\'))"', 'ask']
+  ['powershell', 'node -e "console.log(require(\'fs\').readFileSync(\'notes/private.md\',\'utf8\'))"', 'ask'],
+  // Round 2 (A2-03/B2-02): a cd inside a subshell or $( ) doesn't outlast it; pushd/popd.
+  ['bash', '(cd notes && ls); cat notes/private.md', 'deny'], ['bash', 'd=$(cd drafts && pwd); cat notes/private.md', 'deny'],
+  ['bash', 'pushd drafts >/dev/null && popd >/dev/null && cat notes/private.md', 'deny'], ['bash', 'popd; cat notes/private.md', 'ask'],
+  ['powershell', 'Push-Location notes; Pop-Location; Get-Content notes\\private.md', 'deny'],
+  ['bash', '(cd drafts && cat ch3.md)', 'allow'], ['bash', 'pushd notes && popd && cat drafts/ch3.md', 'allow'],
+  // eval and Invoke-Expression run their argument as code.
+  ['bash', 'eval "cat notes/private.md"', 'deny'], ['bash', "eval 'head -3 notes/private.md'", 'deny'], ['bash', "eval 'cat notes/private.md'", 'deny'],
+  ['powershell', 'Invoke-Expression "Get-Content notes\\private.md"', 'deny'], ['powershell', "Invoke-Expression 'Get-Content notes\\private.md'", 'deny'],
+  ['powershell', "iex 'Get-Content notes\\private.md'", 'deny'], ['powershell', "iex 'gc notes/private.md'", 'deny'],
+  ['bash', 'eval "cat drafts/ch3.md"', 'allow'], ['powershell', "iex 'Get-Content drafts\\ch3.md'", 'allow'],
+  // .NET calls in PowerShell, and $PWD.
+  ['powershell', "[IO.File]::ReadAllText('notes\\private.md')", 'ask'], ['powershell', '[System.IO.File]::ReadAllLines("notes\\private.md")', 'ask'],
+  ['powershell', "[System.IO.File]::ReadAllText('notes\\private.md')", 'ask'], ['powershell', '[IO.File]::ReadAllText("$PWD\\notes\\private.md")', 'ask'],
+  ['powershell', "$t = [IO.File]::ReadAllText('notes\\private.md', [Text.Encoding]::UTF8); $t", 'ask'],
+  ['powershell', '[System.IO.File]::ReadAllText((Resolve-Path notes\\private.md))', 'ask'], ['powershell', "'notes\\private.md' | Get-Content", 'ask'],
+  ['powershell', "[IO.File]::ReadAllText('drafts\\ch3.md')", 'allow'], ['powershell', '[Math]::Round(3.14159, 2)', 'allow'],
+  ['powershell', "& 'C:\\Windows\\System32\\where.exe' notepad", 'allow'], ['powershell', '$PWD', 'allow'],
+  ['bash', 'cat "$PWD/notes/private.md"', 'deny'], ['bash', 'cat "$PWD/drafts/ch3.md"', 'allow'],
+  // A here-document whose delimiter isn't quoted expands $( ) in its body.
+  ['bash', 'cat > drafts/new.md <<EOF\n$(cat notes/private.md)\nEOF', 'deny'], ['bash', "cat > drafts/new.md <<'EOF'\n$(cat notes/private.md)\nEOF", 'allow'],
+  // xargs -a, fd -x, awk programs that open files.
+  ['bash', 'xargs -a notes/private.md echo', 'deny'], ['bash', 'xargs -a drafts/ch3.md echo', 'allow'],
+  ['bash', 'fd -e md -x cat {}', 'deny'], ['bash', 'fd -x cat', 'deny'], ['bash', 'fd -e md', 'allow'], ['bash', 'fd -e md . drafts -x cat {}', 'allow'],
+  ['bash', "awk 'BEGIN{while((getline l < \"notes/private.md\")>0) print l}'", 'ask'], ['bash', "awk '{print $1}' drafts/ch3.md", 'allow']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

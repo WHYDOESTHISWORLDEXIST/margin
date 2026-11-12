@@ -14,6 +14,15 @@ import path from 'node:path';
 
 const IS_WINDOWS = process.platform === 'win32';
 const MAX_DEPTH = 3;
+// Stands for the shell's current folder ($PWD) until the folder is known.
+const PWD_MARK = '\u0001PWD\u0001';
+// The start of a .NET static call in PowerShell: [IO.File]::ReadAllText(...)
+const DOTNET = /^\[([^\]]+)\]::/;
+// .NET types whose calls read a file named in their arguments.
+const DOTNET_READERS = /^(system\.)?io\.(file|filestream|fileinfo|streamreader|binaryreader)$/i;
+// A subshell or command substitution: a `cd` inside it doesn't outlast it.
+const SCOPE_OPEN = { scope: 'open' };
+const SCOPE_CLOSE = { scope: 'close' };
 
 // --------------------------------------------------------------------------
 // Programs
@@ -41,17 +50,19 @@ const QUIET = new Set([
   'echo', 'printf', 'true', 'false', 'test', '[', '[[', ':', 'pwd', 'stat', 'du', 'df', 'file', 'which', 'whereis',
   'realpath', 'readlink', 'basename', 'dirname', 'mkdir', 'rmdir', 'touch', 'rm', 'mv', 'ln', 'chmod', 'chown', 'chgrp',
   'open', 'xdg-open', 'start', 'code', 'explorer', 'sleep', 'date', 'clear', 'export', 'unset', 'alias', 'read', 'wait',
-  'kill', 'ps', 'whoami', 'hostname', 'uname', 'history', 'exit', 'return', 'set', 'shopt', 'popd', 'tee', 'tr', 'seq',
-  'locate', 'popd', 'trap', 'local', 'declare', 'readonly', 'type' /* bash builtin; PowerShell's type is a reader */,
+  'kill', 'ps', 'whoami', 'hostname', 'uname', 'history', 'exit', 'return', 'set', 'shopt', 'tee', 'tr', 'seq',
+  'locate', 'trap', 'local', 'declare', 'readonly', 'type' /* bash builtin; PowerShell's type is a reader */,
   'write-output', 'write', 'write-host', 'out-host', 'out-null', 'out-string', 'out-file', 'set-content', 'sc',
   'add-content', 'ac', 'new-item', 'ni', 'md', 'remove-item', 'ri', 'del', 'erase', 'rd', 'move-item', 'mi', 'move',
   'rename-item', 'ren', 'rni', 'test-path', 'resolve-path', 'rvpa', 'split-path', 'join-path', 'get-location', 'gl',
-  'pop-location', 'select-object', 'select', 'where-object', 'where', '?', 'foreach-object', 'foreach', '%', 'sort-object',
+  'select-object', 'select', 'where-object', 'where', '?', 'foreach-object', 'foreach', '%', 'sort-object',
   'measure-object', 'measure', 'format-table', 'ft', 'format-list', 'fl', 'get-date', 'start-sleep', 'invoke-item', 'ii',
   'start-process', 'saps', 'get-command', 'gcm', 'get-help', 'clear-host', 'cls', 'get-filehash', 'compare-object',
   'get-process', 'gps', 'get-service', 'get-variable', 'set-variable', 'new-object', 'add-type', 'out-default'
 ]);
 const CD = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
+const PUSH = new Set(['pushd', 'push-location']);
+const POP = new Set(['popd', 'pop-location']);
 const KEYWORDS = new Set(['!', '{', '}', 'then', 'do', 'done', 'else', 'elif', 'if', 'fi', 'esac', 'while', 'until', 'time', 'exec', 'command', 'builtin', 'nohup', 'coproc', 'function']);
 // PowerShell's own readers take -Path style parameters; the rest are external programs.
 const PS_NATIVE_READERS = new Set(['get-content', 'gc', 'cat', 'type', 'import-csv', 'ipcsv', 'import-clixml', 'format-hex', 'fhx', 'copy-item', 'copy', 'cp', 'cpi', 'more', 'findstr']);
@@ -99,8 +110,10 @@ function tokenize(src, dialect, vars, depth) {
   const heredocs = [];         // [{ delim, strip, cmd }] waiting for the next line
   let i = 0;
 
-  function newCommand(pipedFrom) { return { words: [], inputs: [], heredocs: [], pipedFrom }; }
-  function startWord() { if (!word) word = { text: '', dynamic: false, glob: false, onlyVar: null }; }
+  function newCommand(pipedFrom) { return { words: [], inputs: [], heredocs: [], pipedFrom, callOp: false }; }
+  // quoted: part of the word was quoted or escaped. inner: the text of a PowerShell
+  // ( ... ) argument, kept so a .NET call's arguments can be looked at.
+  function startWord() { if (!word) word = { text: '', dynamic: false, glob: false, onlyVar: null, quoted: false }; }
   function endWord() {
     if (!word) return;
     const w = word;
@@ -109,7 +122,8 @@ function tokenize(src, dialect, vars, depth) {
       const r = pending;
       pending = null;
       if (r === 'in') cmd.inputs.push(w);
-      else if (r === 'here') heredocs.push({ delim: w.text, strip: heredocStrip, cmd });
+      // An unquoted delimiter (<<EOF) means bash expands $( ) in the body.
+      else if (r === 'here') heredocs.push({ delim: w.text, strip: heredocStrip, cmd, expand: !w.quoted });
       return; // output targets, here-strings and fd numbers aren't reads
     }
     cmd.words.push(w);
@@ -134,13 +148,19 @@ function tokenize(src, dialect, vars, depth) {
       if (words[2].dynamic) delete vars[words[0].onlyVar]; else vars[words[0].onlyVar] = words[2].text;
     }
   }
+  // Commands inside $( ), backticks or <( ). In bash they run in a subshell, so a
+  // `cd` there doesn't outlast them; in PowerShell a location change does.
   function nested(text) {
-    if (depth < MAX_DEPTH) commands.push(...tokenize(text, dialect, vars, depth + 1));
+    if (depth >= MAX_DEPTH) return;
+    const inner = tokenize(text, dialect, vars, depth + 1);
+    if (ps) commands.push(...inner);
+    else commands.push(SCOPE_OPEN, ...inner, SCOPE_CLOSE);
   }
   function substitute(name) {
     const key = ps ? name.toLowerCase() : name;
     const wasEmpty = !word.text && !word.dynamic;
     if (key === 'HOME' || key === 'home' || key === 'env:home' || key === 'env:userprofile') { word.text += os.homedir(); return; }
+    if (key === 'PWD' || key === 'pwd') { word.text += PWD_MARK; return; }
     if (Object.prototype.hasOwnProperty.call(vars, key)) { word.text += vars[key]; return; }
     word.dynamic = true;
     if (wasEmpty) word.onlyVar = key;
@@ -195,7 +215,9 @@ function tokenize(src, dialect, vars, depth) {
         if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) break;
         lines.push(line);
       }
-      h.cmd.heredocs.push(lines.join('\n'));
+      const body = lines.join('\n');
+      h.cmd.heredocs.push(body);
+      if (h.expand) for (const code of substitutionsIn(body)) nested(code);
     }
   }
 
@@ -213,6 +235,7 @@ function tokenize(src, dialect, vars, depth) {
         const e = src.indexOf(`\n${q}@`, bodyStart - 1);
         const stop = e < 0 ? n : e;
         startWord();
+        word.quoted = true;
         word.text += src.slice(bodyStart, stop).replace(/\r$/, '');
         if (q === '"' && word.text.includes('$')) word.dynamic = true;
         i = e < 0 ? n : e + 3;
@@ -220,6 +243,7 @@ function tokenize(src, dialect, vars, depth) {
       }
       if (c === "'") {
         startWord();
+        word.quoted = true;
         let j = i + 1;
         while (j < n) { if (src[j] === "'") { if (src[j + 1] === "'") { word.text += "'"; j += 2; continue; } break; } word.text += src[j]; j++; }
         i = j + 1;
@@ -227,6 +251,7 @@ function tokenize(src, dialect, vars, depth) {
       }
       if (c === '"') {
         startWord();
+        word.quoted = true;
         let j = i + 1;
         while (j < n && src[j] !== '"') {
           if (src[j] === '`') { word.text += src[j + 1] ?? ''; j += 2; continue; }
@@ -240,11 +265,11 @@ function tokenize(src, dialect, vars, depth) {
       if (c === '|') { if (src[i + 1] === '|') { endCommand(false); i += 2; } else { endCommand(true); i++; } continue; }
       if (c === '&') {
         if (src[i + 1] === '&') { endCommand(false); i += 2; continue; }
-        if (!word && !cmd.words.length) { i++; continue; } // the call operator: & "C:\tool.exe" args
+        if (!word && !cmd.words.length) { cmd.callOp = true; i++; continue; } // the call operator: & "C:\tool.exe" args
         endCommand(false); i++; continue;
       }
       if (c === '(' && (word || cmd.words.length)) { // (subexpression) as an argument: its value is only known when it runs
-        endWord(); startWord(); const end = findClose(i, '(', ')'); nested(src.slice(i + 1, end)); word.dynamic = true; i = end + 1; continue;
+        endWord(); startWord(); const end = findClose(i, '(', ')'); word.inner = src.slice(i + 1, end); nested(word.inner); word.dynamic = true; i = end + 1; continue;
       }
       if (c === ';' || c === '{' || c === '}' || c === '(' || c === ')') { endCommand(false); i++; continue; }
       if (c === ',') { endWord(); i++; continue; }
@@ -256,10 +281,11 @@ function tokenize(src, dialect, vars, depth) {
       if (c === '<') { endWord(); pending = 'in'; i++; continue; }
     } else {
       if (!word && c === '#') { while (i < n && src[i] !== '\n') i++; continue; }
-      if (c === '\\') { if (src[i + 1] === '\n') { i += 2; continue; } startWord(); word.text += src[i + 1] ?? ''; i += 2; continue; }
-      if (c === "'") { startWord(); const e = src.indexOf("'", i + 1); const stop = e < 0 ? n : e; word.text += src.slice(i + 1, stop); i = stop + 1; continue; }
+      if (c === '\\') { if (src[i + 1] === '\n') { i += 2; continue; } startWord(); word.quoted = true; word.text += src[i + 1] ?? ''; i += 2; continue; }
+      if (c === "'") { startWord(); word.quoted = true; const e = src.indexOf("'", i + 1); const stop = e < 0 ? n : e; word.text += src.slice(i + 1, stop); i = stop + 1; continue; }
       if (c === '"') {
         startWord();
+        word.quoted = true;
         let j = i + 1;
         while (j < n && src[j] !== '"') {
           if (src[j] === '\\' && '"\\$`\n'.includes(src[j + 1])) { if (src[j + 1] !== '\n') word.text += src[j + 1]; j += 2; continue; }
@@ -270,7 +296,7 @@ function tokenize(src, dialect, vars, depth) {
         i = j + 1;
         continue;
       }
-      if (c === '$') { startWord(); if (src[i + 1] === "'") { const e = src.indexOf("'", i + 2); const stop = e < 0 ? n : e; word.text += src.slice(i + 2, stop); i = stop + 1; } else i = readDollar(i); continue; }
+      if (c === '$') { startWord(); if (src[i + 1] === "'") { word.quoted = true; const e = src.indexOf("'", i + 2); const stop = e < 0 ? n : e; word.text += src.slice(i + 2, stop); i = stop + 1; } else i = readDollar(i); continue; }
       if (c === '`') { startWord(); i = readBacktickCommand(i); continue; }
       if (c === '|') { if (src[i + 1] === '|') { endCommand(false); i += 2; } else { endCommand(true); i += src[i + 1] === '&' ? 2 : 1; } continue; }
       if (c === '&') {
@@ -279,7 +305,8 @@ function tokenize(src, dialect, vars, depth) {
         endCommand(false); i++; continue;
       }
       if (c === ';') { endCommand(false); i += src[i + 1] === ';' ? 2 : 1; continue; }
-      if (c === ')' || (c === '(' && !word)) { endCommand(false); i++; continue; }
+      if (c === '(' && !word) { endCommand(false); commands.push(SCOPE_OPEN); i++; continue; }   // ( subshell )
+      if (c === ')') { endCommand(false); commands.push(SCOPE_CLOSE); i++; continue; }
       if (c === '<' && src[i + 1] === '(' ) { // process substitution <(cmd): the inner command runs
         startWord(); const end = findClose(i + 1, '(', ')'); nested(src.slice(i + 2, end)); word.dynamic = true; i = end + 1; continue;
       }
@@ -318,6 +345,7 @@ function programName(text) {
 function resolvePath(text, cwd) {
   let t = text;
   if (!t || t.length > 1024 || t.includes('\0')) return null;
+  if (t.includes(PWD_MARK)) { if (!cwd) return null; t = t.split(PWD_MARK).join(cwd); }
   if (IS_WINDOWS) { const m = /^\/([a-zA-Z])(?:\/|$)(.*)$/.exec(t); if (m) t = `${m[1]}:/${m[2]}`; } // Git Bash: /c/Users/... is C:/Users/...
   if (t === '~' || t.startsWith('~/') || t.startsWith('~\\')) t = path.join(os.homedir(), t.slice(1));
   if (path.isAbsolute(t)) return path.resolve(t);
@@ -342,11 +370,41 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
 
   function safeReal(p) { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } }
 
+  // Runs a command line, following its current folder: `cd`, `pushd`/`popd` (null
+  // when it can't be known), and subshells, after which the folder is as before.
+  // Returns the folder at the end.
   function run(text, dl, startCwd, depth) {
     let here = startCwd;
+    const ctx = { dirs: [] };
+    const scopes = [];
     for (const c of tokenize(text, dl, {}, 0)) {
-      const next = one(c, dl, here, depth);
+      if (c === SCOPE_OPEN) { scopes.push({ here, dirs: [...ctx.dirs] }); continue; }
+      if (c === SCOPE_CLOSE) { const s = scopes.pop(); if (s) { here = s.here; ctx.dirs = s.dirs; } continue; }
+      const next = one(c, dl, here, depth, ctx);
       if (next !== undefined) here = next;
+    }
+    return here;
+  }
+
+  // Code a shell runs in the current session (eval, Invoke-Expression): parsed like
+  // the rest; code that is only known when it runs can't be checked, so it asks.
+  function inlineRun(words, dl, cwd, depth, program, c) {
+    if (!words.length) { if (c.pipedFrom) out.unknown.push({ word: 'code from its input', program }); return undefined; }
+    if (words.some((w) => w.dynamic) || depth >= MAX_DEPTH) { out.unknown.push({ word: words.map((w) => w.text).join(' ') || '(a variable)', program }); return undefined; }
+    return run(words.map((w) => w.text).join(' '), dl, cwd, depth + 1);
+  }
+
+  // PowerShell .NET calls such as [IO.File]::ReadAllText('notes\x.md'): string
+  // literals in the arguments that name existing files outside the list ask; for
+  // the file-reading types, an argument only known when it runs asks too.
+  function dotnetCalls(words, cwd) {
+    for (let k = 0; k < words.length; k++) {
+      const m = DOTNET.exec(words[k].text);
+      const call = words[k + 1];
+      if (!m || !call || call.inner === undefined) continue;
+      scanCode(call.inner, cwd, words[k].text);
+      const rest = call.inner.replace(/\$(\{pwd\}|pwd)(?!\w)/gi, '');
+      if (DOTNET_READERS.test(m[1]) && /[$(]/.test(rest)) out.unknown.push({ word: call.inner.trim(), program: words[k].text });
     }
   }
 
@@ -379,12 +437,13 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (p !== null && statOf(p)) out.named.push({ path: p, program });
   }
 
-  // String literals in inline code that name existing files.
+  // String literals in inline code that name existing files. A leading $PWD is the
+  // current folder.
   function scanCode(code, cwd, program) {
     let count = 0;
     for (const m of code.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
       if (++count > 64) break;
-      const text = m[2].replace(/\\\\/g, '\\').trim();
+      const text = m[2].replace(/\\\\/g, '\\').trim().replace(/^\$(\{pwd\}|pwd)(?=[\\/]|$)/i, PWD_MARK);
       if (text && text.length < 300) named({ text, dynamic: false, glob: false }, cwd, program);
     }
   }
@@ -407,24 +466,36 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     return roots.length ? roots : [{ text: '.', dynamic: false, glob: false }];
   }
 
-  function one(c, dl, cwd, depth) {
+  function one(c, dl, cwd, depth, ctx) {
     const ps = dl === 'powershell';
     for (const w of c.inputs) readTarget(w, cwd, '<', false);
     let words = stripPrefix(c.words);
     if (!words.length) return undefined;
     if (LOOP_HEADERS.has(words[0].text)) return undefined;
+    if (ps) dotnetCalls(words, cwd);
     const progWord = words[0];
     const args = words.slice(1);
     if (progWord.dynamic) { for (const w of args) named(w, cwd, progWord.text || 'a program'); return undefined; }
+    // In PowerShell a line that starts with a string (and no & call operator) is an
+    // expression, not a command: its strings may name files, e.g. the argument of a
+    // .NET call, so they are checked like an interpreter's.
+    if (ps && progWord.quoted && !c.callOp) { for (const w of words) named(w, cwd, 'PowerShell'); return undefined; }
     const prog = programName(progWord.text);
 
+    if (POP.has(prog)) return ctx.dirs.length ? ctx.dirs.pop() : null;
     if (CD.has(prog)) {
       const target = ps ? (psArgs(args).named['-path']?.[0] || psArgs(args).positional[0]) : args.find((w) => !/^-/.test(w.text) || w.text === '-');
-      if (!target) return ps ? undefined : os.homedir();
+      if (PUSH.has(prog)) ctx.dirs.push(cwd);
+      if (!target) return PUSH.has(prog) ? (ps ? undefined : null) : ps ? undefined : os.homedir();
       if (target.dynamic || target.text === '-') return null;
       return resolvePath(target.text, cwd);
     }
     if (prog === 'node' && isMarginScript(args, cwd)) return undefined;
+    if (!ps && prog === 'eval') return inlineRun(args, dl, cwd, depth, 'eval', c);
+    if (ps && (prog === 'invoke-expression' || prog === 'iex')) {
+      const a = psArgs(args);
+      return inlineRun([...(a.named['-command'] || []), ...a.positional], dl, cwd, depth, prog, c);
+    }
 
     if (SHELLS[prog]) {
       const code = inlineShellCode(prog, args);
@@ -451,6 +522,11 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       if (args.some((w) => /^-(exec|execdir|ok|okdir)$/.test(w.text))) {
         for (const r of listerRoots(c, cwd, false)) readTarget(r, cwd, 'find -exec', true);
       }
+      return undefined;
+    }
+    if (prog === 'fd' || prog === 'fdfind') {   // fd -x cmd runs cmd on every file it finds
+      const at = args.findIndex((w) => /^(-x|-X|--exec|--exec-batch)$/.test(w.text) || /^--exec(-batch)?=/.test(w.text));
+      if (at >= 0) for (const r of fdRoots(args.slice(0, at))) readTarget(r, cwd, `${prog} -x`, true);
       return undefined;
     }
     if (LISTERS.has(prog) || (QUIET.has(prog) && !(ps && PS_READERS.has(prog)))) return undefined;
@@ -516,21 +592,34 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     }
     let files = operands;
     if (prog === 'sed') { for (const w of [...(named_.get('-f') || []), ...(named_.get('--file') || [])]) readTarget(w, cwd, prog, false); if (!has('-e', '--expression', '-f', '--file')) files = operands.slice(1); }
-    if (['awk', 'gawk', 'mawk', 'nawk'].includes(prog)) { for (const w of [...(named_.get('-f') || []), ...(named_.get('--file') || [])]) readTarget(w, cwd, prog, false); if (!has('-f', '--file')) files = operands.slice(1); }
+    if (['awk', 'gawk', 'mawk', 'nawk'].includes(prog)) {
+      for (const w of [...(named_.get('-f') || []), ...(named_.get('--file') || [])]) readTarget(w, cwd, prog, false);
+      if (!has('-f', '--file')) {
+        if (operands[0]) scanCode(operands[0].text, cwd, prog);   // the program can open files itself (getline < "x")
+        files = operands.slice(1);
+      }
+    }
     if (prog === 'cp' && !has('-t', '--target-directory')) files = operands.slice(0, -1);
     for (const w of files) readTarget(w, cwd, prog, false);
     return undefined;
   }
 
-  // xargs runs a command on names it reads from its input.
+  // xargs runs a command on names it reads from its input, or from the file -a names
+  // (whose contents end up on the command line, so that file counts as read).
   function xargs(c, args, dl, cwd, depth) {
     const withValue = ['-n', '-L', '-P', '-I', '-d', '-E', '-s', '-a', '--max-args', '--delimiter', '--arg-file'];
     let k = 0;
-    while (k < args.length && args[k].text.startsWith('-')) { if (withValue.includes(args[k].text)) k++; k++; }
+    while (k < args.length && args[k].text.startsWith('-')) {
+      const t = args[k].text;
+      if ((t === '-a' || t === '--arg-file') && args[k + 1]) readTarget(args[k + 1], cwd, 'xargs -a', false);
+      else if (t.startsWith('--arg-file=')) readTarget({ ...args[k], text: t.slice('--arg-file='.length) }, cwd, 'xargs -a', false);
+      if (withValue.includes(t)) k++;
+      k++;
+    }
     const inner = args.slice(k);
     if (!inner.length) return;
     const innerProg = programName(inner[0].text);
-    one({ words: inner, inputs: [], heredocs: [], pipedFrom: null }, dl, cwd, depth);
+    one({ words: inner, inputs: [], heredocs: [], pipedFrom: null }, dl, cwd, depth, { dirs: [] });
     const readers = dl === 'powershell' ? PS_READERS : POSIX_READERS;
     if (readers.has(innerProg)) pipedSearch(c, cwd, `xargs ${innerProg}`, false, dl);
   }
@@ -619,6 +708,52 @@ function inlineShellCode(prog, args) {
   }
   const at = args.findIndex((w) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w.text));
   return at >= 0 && args[at + 1] ? args[at + 1].text : null;
+}
+
+// The commands inside $( ... ) and backticks in a stretch of text: bash expands them
+// in the body of a here-document whose delimiter isn't quoted.
+function substitutionsIn(text) {
+  const out = [];
+  for (let j = 0; j < text.length; j++) {
+    const c = text[j];
+    if (c === '\\') { j++; continue; }
+    if (c === '$' && text[j + 1] === '(' && text[j + 2] !== '(') {
+      let level = 0;
+      let k = j + 1;
+      for (; k < text.length; k++) {
+        if (text[k] === '\\') { k++; continue; }
+        if (text[k] === '(') level++;
+        else if (text[k] === ')' && --level === 0) break;
+      }
+      out.push(text.slice(j + 2, k));
+      j = k;
+    } else if (c === '`') {
+      let k = j + 1;
+      while (k < text.length && text[k] !== '`') { if (text[k] === '\\') k++; k++; }
+      out.push(text.slice(j + 1, k));
+      j = k;
+    }
+  }
+  return out;
+}
+
+// The folders `fd [pattern] [path...]` searches: its paths after the pattern (and any
+// --search-path), else the current folder.
+const FD_VALUES = new Set(['-e', '--extension', '-t', '--type', '-E', '--exclude', '-d', '--max-depth', '--min-depth', '--exact-depth',
+  '-S', '--size', '-j', '--threads', '-c', '--color', '--changed-within', '--changed-before', '--change-newer-than', '--change-older-than',
+  '-o', '--owner', '--ignore-file', '--path-separator', '--max-results', '--format', '--base-directory']);
+function fdRoots(words) {
+  const positional = [];
+  const roots = [];
+  for (let k = 0; k < words.length; k++) {
+    const t = words[k].text;
+    if (t === '--search-path' && words[k + 1]) { roots.push(words[++k]); continue; }
+    if (t.startsWith('--search-path=')) { roots.push({ ...words[k], text: t.slice('--search-path='.length) }); continue; }
+    if (t.startsWith('-') && !words[k].dynamic) { if (FD_VALUES.has(t)) k++; continue; }
+    positional.push(words[k]);
+  }
+  roots.push(...positional.slice(1));
+  return roots.length ? roots : [{ text: '.', dynamic: false, glob: false }];
 }
 
 // PowerShell parameters: { named: { '-path': [word] }, positional: [word] }.
