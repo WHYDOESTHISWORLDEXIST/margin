@@ -17,12 +17,47 @@ const [command = 'list', ...rest] = scriptArgs();
 const arg = rest[0];
 const KINDS = ['citation', 'related', 'contradiction', 'todo', 'note'];
 
-// Two notes are the same note when they are about the same file, of the same
-// kind, and say the same thing (ignoring case, spacing and curly quotes). The
-// line doesn't count: it moves as the draft changes. A note that is already
-// queued, or that the writer already dismissed, is not added again.
+// A new note that repeats one already queued or dismissed is not added again, so
+// running /margin:check twice adds nothing and a dismissed note stays dismissed.
+// Each stored note can absorb only one new note, though: three places that get the
+// same wording stay three notes. The key is the file, the kind and the message
+// (ignoring case, spacing and curly quotes); the line moves as the draft changes.
 const normalizeMessage = (m) => String(m).replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase();
 const sameNoteKey = (file, kind, message) => `${fileKey(root, file)}|${kind}|${normalizeMessage(message)}`;
+// What the rules compare: { key, file, kind, line, source }.
+const view = (i) => ({
+  key: sameNoteKey(i.file, i.kind, i.message),
+  file: fileKey(root, i.file),
+  kind: i.kind,
+  line: Number(i.line) || 1,
+  source: typeof i.source === 'string' && i.source.trim() ? i.source.trim() : null
+});
+// Rules for "the same note at the same place". They are tried first, and they also
+// merge repeats within one command.
+const SAME_PLACE = [
+  (a, b) => a.key === b.key && a.line === b.line
+];
+// Rules for "the same note, somewhere else" (it moved): tried only after every
+// same-place match, so a note isn't taken by a look-alike elsewhere.
+const SAME_NOTE = [
+  (a, b) => a.key === b.key
+];
+// Splits new notes (as views) into repeats and new ones; each stored note absorbs at most one.
+function findRepeats(fresh, storedItems) {
+  const stored = storedItems.map((i) => ({ v: view(i), used: false }));
+  const repeats = new Set();
+  fresh.forEach((f, k) => {
+    if (fresh.slice(0, k).some((g) => !repeats.has(g) && SAME_PLACE.some((rule) => rule(f.v, g.v)))) repeats.add(f);
+  });
+  for (const rules of [SAME_PLACE, SAME_NOTE]) {
+    for (const f of fresh) {
+      if (repeats.has(f)) continue;
+      const s = stored.find((x) => !x.used && rules.some((rule) => rule(f.v, x.v)));
+      if (s) { s.used = true; repeats.add(f); }
+    }
+  }
+  return repeats;
+}
 
 // Notes given as flags need no JSON quoting, which Windows PowerShell 5.1 breaks
 // when it passes arguments to programs.
@@ -73,9 +108,7 @@ if (command === 'add') {
     data = { version: 1, items: [] };
   }
   const list = Array.isArray(incoming) ? incoming : [incoming];
-  const known = new Set(data.items.filter((i) => typeof i.file === 'string' && i.message !== undefined).map((i) => sameNoteKey(i.file, i.kind, i.message)));
-  let added = 0;
-  let already = 0;
+  const fresh = [];
   for (const n of list) {
     if (!isPlainObject(n) || !n.file || !n.message) { console.log('Each note needs "file" and "message".'); continue; }
     const item = {
@@ -88,10 +121,14 @@ if (command === 'add') {
       createdAt: new Date().toISOString(),
       status: 'open'
     };
-    const key = sameNoteKey(item.file, item.kind, item.message);
-    if (known.has(key)) { already++; continue; }
-    known.add(key);
-    data.items.push(item);
+    fresh.push({ item, v: view(item) });
+  }
+  const repeats = findRepeats(fresh, data.items.filter((i) => typeof i.file === 'string' && i.message !== undefined));
+  let added = 0;
+  let already = 0;
+  for (const f of fresh) {
+    if (repeats.has(f)) { already++; continue; }
+    data.items.push(f.item);
     added++;
   }
   if (added || loaded.damaged) writeJsonAtomic(file, data);

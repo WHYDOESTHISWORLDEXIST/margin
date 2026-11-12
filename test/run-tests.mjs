@@ -1633,6 +1633,25 @@ test('a note that is already queued or dismissed is not added again, and the cou
   assert(bad.out.includes('Each note needs') && bad.out.includes('1 new, 0 already queued or dismissed.'), bad.out);
 });
 
+// A2-06: the same wording at different places stays separate notes; each stored note
+// (queued or dismissed) absorbs only one repeat.
+test('identical notes at different lines are each queued, and a re-run still adds nothing (A2-06)', () => {
+  const dir = project();
+  const tk = (...lines) => run('suggestions.mjs', ['add', ...lines.flatMap((l) => ['--file', 'drafts/ch3.md', '--line', String(l), '--kind', 'todo', '--message', 'Leftover TK marker.'])], dir);
+  const items = () => JSON.parse(fs.readFileSync(marginPath(dir, 'suggestions.json'), 'utf8')).items;
+  const first = tk(1, 3, 4);
+  assert(first.out.startsWith('3 new, 0 already queued or dismissed. 3 open in total.'), first.out);
+  assert(items().map((i) => i.line).join() === '1,3,4', `lines: ${items().map((i) => i.line)}`);
+  const again = tk(1, 3, 4);
+  assert(again.out.startsWith('0 new, 3 already queued or dismissed. 3 open in total.'), again.out);
+  run('suggestions.mjs', ['dismiss', items()[1].id], dir);
+  const third = tk(1, 3, 4);
+  assert(third.out.startsWith('0 new, 3 already queued or dismissed. 2 open in total.') && items().filter((i) => i.status === 'dismissed').length === 1, third.out);
+  // One more marker appears: only it is new, and the stored notes keep their places.
+  const fourth = tk(1, 3, 4, 9);
+  assert(fourth.out.startsWith('1 new, 3 already queued or dismissed. 3 open in total.') && items().map((i) => i.line).join() === '1,3,4,9', `${fourth.out} ${items().map((i) => i.line)}`);
+});
+
 // B-28: one unreadable thing, a bad argument or a tools folder must not spoil the inventory.
 test('inventory: a bad folder argument gets a clear message; a folder outside the project is refused (B-28)', () => {
   const dir = project();
