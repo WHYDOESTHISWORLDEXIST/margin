@@ -605,11 +605,16 @@ export function withLock(root, name, fn) {
 }
 
 // Changes are numbered by a stable id. Older logs have no ids; their entries are
-// numbered by their line, which is what /margin:review always showed.
+// numbered by their line, which is what /margin:review always showed. A line that
+// parses but names no file can't be listed or undone, so it counts as damaged (and
+// is kept as it is when the log is rewritten).
 export function readChanges(root) {
   const log = readJsonl(logPath(root));
+  const usable = (l) => l.value && typeof l.value.file === 'string' && l.value.file.trim() !== '';
+  for (const l of log.lines) if (l.value && !usable(l)) log.bad.push(l.n);
+  log.bad.sort((a, b) => a - b);
   const changes = log.lines
-    .filter((l) => l.value)
+    .filter(usable)
     .map((l) => ({ id: Number.isInteger(l.value.id) && l.value.id > 0 ? l.value.id : l.n, e: l.value }));
   return { log, changes };
 }

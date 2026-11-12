@@ -714,6 +714,35 @@ test('a pending record older than a day is swept with its backup; newer ones sta
   assert(backupFiles(dir).length === 2, `the declined edit's backup should be gone: ${backupFiles(dir)}`);
 });
 
+// --- A2-09: one odd log line, or a draft held open by another program, never ends in a stack trace ---
+
+test('a log line that names no file is skipped as damaged; list and undo still work (A2-09)', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts', 'ch3.md');
+  const before = readText(file);
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_shape', 'changed\n');
+  fs.appendFileSync(marginPath(dir, 'log.jsonl'), JSON.stringify({ id: 2, time: new Date().toISOString(), tool: 'Edit' }) + '\n');
+  const list = run('review.mjs', ['list'], dir);
+  assert(list.code === 0 && list.err === '' && /^1\t/m.test(list.out) && list.out.includes('damaged line') && list.out.includes('line 2'), `${list.out}${list.err}`);
+  const undo = run('review.mjs', ['undo', '1'], dir);
+  assert(undo.code === 0 && readText(file) === before, `${undo.out}${undo.err}`);
+  assert(readText(marginPath(dir, 'log.jsonl')).includes('{"id":2,'), 'the odd line is kept as it was');
+});
+
+test('undo of a file another program holds open says so in one line and changes nothing (A2-09)', () => {
+  const dir = project();
+  setUp(dir);
+  const file = path.join(dir, 'drafts', 'ch3.md');
+  claudeEdits(dir, 'drafts/ch3.md', 'toolu_held', 'v1 by Claude\n');
+  const backups = backupFiles(dir).length;
+  const log = readText(marginPath(dir, 'log.jsonl'));
+  const undo = run('review.mjs', ['undo', '1'], dir, null, { MARGIN_TEST_FAIL: 'restore' });
+  assert(undo.code === 1 && undo.err === '' && undo.out.trim().split('\n').length === 1 && undo.out.includes('open in another program'), `${undo.out}${undo.err}`);
+  assert(readText(file) === 'v1 by Claude\n' && readText(marginPath(dir, 'log.jsonl')) === log, 'the file and the log are unchanged');
+  assert(backupFiles(dir).length === backups, 'no copy is left behind');
+});
+
 // --- Organize never loses track of a move (A-07/B-10) ---
 
 function plan(dir, steps) {

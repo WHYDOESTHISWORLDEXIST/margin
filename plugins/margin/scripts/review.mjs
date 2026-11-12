@@ -109,12 +109,25 @@ function undo(id, goAhead) {
     copyFileAtomic(target, kept.abs);
   }
   // 2. Bring back the earlier version (or move a file Claude created to the trash).
-  if (snapshot) {
-    copyFileAtomic(snapshot, target);
-  } else {
-    const trash = path.join(marginDir(root), 'trash', `${Date.now()}__${path.basename(target)}`);
-    fs.mkdirSync(path.dirname(trash), { recursive: true });
-    renameWithRetry(target, trash);
+  //    If another program holds the file, nothing changes: the copy from step 1 goes
+  //    and the writer is told why. MARGIN_TEST_FAIL=restore exists for the tests only.
+  try {
+    if (process.env.MARGIN_TEST_FAIL === 'restore') throw Object.assign(new Error('simulated failure (test only)'), { code: 'EBUSY' });
+    if (snapshot) {
+      copyFileAtomic(snapshot, target);
+    } else {
+      const trash = path.join(marginDir(root), 'trash', `${Date.now()}__${path.basename(target)}`);
+      fs.mkdirSync(path.dirname(trash), { recursive: true });
+      renameWithRetry(target, trash);
+    }
+  } catch (err) {
+    if (kept) fs.rmSync(kept.abs, { force: true });
+    const what = snapshot ? 'restored' : 'moved to the trash';
+    say(['EBUSY', 'EPERM', 'EACCES'].includes(err && err.code)
+      ? `${e.file} is open in another program, so it couldn't be ${what}. Close it and run undo again; nothing was changed.`
+      : `${e.file} couldn't be ${what} (${(err && (err.code || err.message)) || 'unknown error'}). Nothing was changed.`);
+    if (note) say(note);
+    return 1;
   }
   // 3. Record it: this change and any later ones it rolled back are undone; if this
   //    was itself an undo, the changes it had undone are back in effect.
