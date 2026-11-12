@@ -1543,5 +1543,48 @@ test('a note that is already queued or dismissed is not added again, and the cou
   assert(bad.out.includes('Each note needs') && bad.out.includes('1 new, 0 already queued or dismissed.'), bad.out);
 });
 
+// B-28: one unreadable thing, a bad argument or a tools folder must not spoil the inventory.
+test('inventory: a bad folder argument gets a clear message; a folder outside the project is refused (B-28)', () => {
+  const dir = project();
+  const missing = run('inventory.mjs', ['nope'], dir);
+  assert(missing.code === 1 && /There is no folder "nope"/.test(missing.out) && !missing.err, `${missing.out} ${missing.err}`);
+  const asFile = run('inventory.mjs', ['drafts/ch3.md'], dir);
+  assert(asFile.code === 1 && /no folder/.test(asFile.out), asFile.out);
+  const outside = run('inventory.mjs', ['..'], dir);
+  assert(outside.code === 1 && /outside this project/.test(outside.out) && !outside.out.includes('Project:'), outside.out);
+  assert(run('inventory.mjs', ['drafts'], dir).code === 0, 'a folder inside works');
+});
+
+test('inventory: tools folders (.venv, venv, __pycache__, dist, build, .idea) are skipped (B-28)', () => {
+  const dir = project();
+  for (const d of ['.venv', 'venv', '__pycache__', 'dist', 'build', '.idea']) {
+    fs.mkdirSync(path.join(dir, d), { recursive: true });
+    fs.writeFileSync(path.join(dir, d, 'junk.txt'), 'x');
+  }
+  const out = run('inventory.mjs', [], dir).out;
+  assert(!/junk\.txt/.test(out) && out.includes('drafts/ch3.md'), out);
+});
+
+test('inventory: a file that can’t be read is reported in one line and the rest still works (B-28)', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'dup-a.md'), 'same text\n');
+  fs.writeFileSync(path.join(dir, 'dup-b.md'), 'same text\n');
+  const files = ['dup-a.md', 'dup-b.md', 'vanished.md'].map((p) => ({ full: path.join(dir, p), bytes: 10, path: p }));
+  const errors = [];
+  const groups = inventory.findDuplicates(files, { onError: (f) => errors.push(f.path) });
+  assert(errors.join() === 'vanished.md', `errors: ${errors}`);
+  assert(groups.length === 1 && groups[0].map((f) => f.path).join() === 'dup-a.md,dup-b.md', 'the readable pair is still found');
+  // A folder that can't be opened (POSIX permissions; skipped where they don't apply).
+  if (process.platform !== 'win32' && !(process.getuid && process.getuid() === 0)) {
+    fs.mkdirSync(path.join(dir, 'locked'));
+    fs.writeFileSync(path.join(dir, 'locked', 'a.md'), 'x');
+    fs.chmodSync(path.join(dir, 'locked'), 0);
+    try {
+      const out = run('inventory.mjs', [], dir);
+      assert(out.code === 0 && /Couldn't read 1 item\(s\): locked/.test(out.out) && out.out.includes('drafts/ch3.md'), out.out + out.err);
+    } finally { fs.chmodSync(path.join(dir, 'locked'), 0o755); }
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
