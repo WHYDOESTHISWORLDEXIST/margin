@@ -1164,6 +1164,24 @@ test('pause tracker: mostly deleting for minutes reads as stalled; reading does 
   assert(tracker.isStalled(), 'write-delete churn should read as stalled');
 });
 
+test('pause tracker: back after more than a minute away starts a fresh clock; a glance away does not (B-15)', () => {
+  let t = 0;
+  const tracker = new PauseTracker({ stuckMs: 180000, now: () => t });
+  tracker.recordEdit(5, 0);
+  t = 120000; tracker.recordBlur();
+  t = 720000;
+  assert(tracker.recordFocus(), 'ten minutes away counts as coming back');
+  assert(!tracker.isStalled() && tracker.idleMs() === 0, 'a fresh clock after coming back');
+  t += 600000;
+  assert(!tracker.isStalled(), 'reading after coming back is not a stall');
+  tracker.recordEdit(5, 0);
+  t += 150000; tracker.recordBlur();
+  t += 20000;
+  assert(!tracker.recordFocus(), 'twenty seconds away is a glance');
+  t += 15000;
+  assert(tracker.isStalled(), 'idle time from before a glance away still counts');
+});
+
 // K4: the break offer backs off by itself once it has been seen (A-15/B-14).
 // Each call runs the offer second by second and returns a string with one
 // letter per second: B shown, . hidden.
@@ -1310,6 +1328,61 @@ await atest('companion: an ignored break offer goes after 2 minutes and stays aw
     const line = statusTimeline(world, 21 * 60);
     assert(line === '.119 B7', `after typing, every 10 s for 21 minutes (back exactly 20 minutes after the keystroke): ${line}`);
   })));
+
+await atest('companion: no break offer greets a writer back from more than a minute away (B-15)', () =>
+  withCompanion({}, (world) => {
+    world.type('a');
+    world.tick(120);
+    world.focus(false);
+    world.tick(600);
+    world.focus(true);
+    const line = statusTimeline(world, 10 * 60);
+    assert(line === '.60', `back after 10 minutes away, then reading, every 10 s for 10 minutes: ${line}`);
+    world.type('b');
+    const again = statusTimeline(world, 4 * 60);
+    assert(again === '.17 B7', `writing again, then 3 minutes idle: ${again}`);
+  }));
+
+// The break menu's place-keeping: the spot where the writer was is highlighted
+// when they come back, and never later than that.
+async function chooseBreak(world, choice) {
+  world.answer(choice);
+  await world.run('margin.breakMenu');
+}
+await atest('companion: after a walk the writer\'s place is highlighted on return, unless they edited first or 30 minutes passed (A-22)', async () => {
+  await withCompanion({}, async (world) => {
+    await chooseBreak(world, 'walk');
+    world.focus(false); world.tick(5 * 60); world.focus(true);
+    await world.settle();
+    const [editor] = world.editors;
+    assert(world.log.shown.join() === 'drafts/ch3.md' && JSON.stringify(world.highlighted(editor)) === '[10]', `back from the walk: shown ${world.log.shown}, highlighted ${world.highlighted(editor)}`);
+    world.tick(6);
+    assert(!world.highlighted(editor).length, 'the highlight fades after 5 s');
+  });
+  await withCompanion({}, async (world) => {
+    await chooseBreak(world, 'walk');
+    world.type('x');
+    world.tick(2 * 60 * 60);
+    world.focus(false); world.tick(10); world.focus(true);
+    await world.settle();
+    assert(!world.log.shown.length, `kept writing instead, then switched apps two hours later: shown ${world.log.shown}`);
+  });
+  await withCompanion({}, async (world) => {
+    await chooseBreak(world, 'walk');
+    world.focus(false); world.tick(31 * 60); world.focus(true);
+    await world.settle();
+    assert(!world.log.shown.length, `back after 31 minutes: shown ${world.log.shown}`);
+  });
+  await withCompanion({}, async (world) => {
+    await chooseBreak(world, 'quiet');
+    world.focus(false); world.tick(60); world.focus(true);
+    await world.settle();
+    assert(!world.log.shown.length, 'switching apps during a quiet break shows nothing');
+    world.log.panels[0].dispose();
+    await world.settle();
+    assert(world.log.shown.join() === 'drafts/ch3.md', `closing the quiet panel: shown ${world.log.shown}`);
+  });
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

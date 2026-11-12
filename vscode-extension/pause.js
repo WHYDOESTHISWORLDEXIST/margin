@@ -5,13 +5,15 @@
 // progress: either no typing at all, or mostly deleting.
 
 class PauseTracker {
-  constructor({ pauseMs = 8000, stuckMs = 180000, now = () => Date.now() } = {}) {
+  constructor({ pauseMs = 8000, stuckMs = 180000, awayMs = 60000, now = () => Date.now() } = {}) {
     this.pauseMs = pauseMs;
     this.stuckMs = stuckMs;
+    this.awayMs = awayMs;
     this.now = now;
     this.lastEdit = now();
     this.events = []; // { t, inserted, deleted }
     this.forcedPause = false;
+    this.blurredAt = null;
   }
 
   recordEdit(inserted, deleted, endsParagraph = false) {
@@ -25,6 +27,20 @@ class PauseTracker {
 
   recordBlur() {
     this.forcedPause = true;
+    this.blurredAt = this.now();
+  }
+
+  // Back in the window. After more than awayMs away the writer starts a fresh
+  // clock: idle time and edits from before don't count, so nothing reads as a
+  // stall until they write again. Returns whether it counted as coming back.
+  recordFocus() {
+    const back = this.blurredAt !== null && this.now() - this.blurredAt >= this.awayMs;
+    this.blurredAt = null;
+    if (back) {
+      this.events = [];
+      this.lastEdit = this.now();
+    }
+    return back;
   }
 
   idleMs() {

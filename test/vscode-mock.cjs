@@ -36,6 +36,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
   const listeners = { edit: [], windowState: [], visible: [] };
   const on = (list) => (cb) => { list.push(cb); return { dispose() { const i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); } }; };
   const settings = { ...DEFAULT_CONFIG, ...config };
+  const relative = (fsPath) => path.relative(root, fsPath).split(path.sep).join('/');
   const answers = [];
   const commands = {};
   const watchers = [];
@@ -58,7 +59,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
       selection: new Selection(new Position(10, 0), new Position(10, 0)),
       decorations: new Map(),
       setDecorations(type, ranges) { log.setDecorations++; this.decorations.set(type, ranges); },
-      revealRange(range) { log.reveals.push({ file: path.relative(root, document.uri.fsPath), line: range.start.line }); }
+      revealRange(range) { log.reveals.push({ file: relative(document.uri.fsPath), line: range.start.line }); }
     };
   }
   let visible = docs.map((d) => makeEditor(documentAt(path.join(root, d))));
@@ -102,7 +103,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
         return typeof want === 'function' ? want(items) : items.find((i) => i === want || i.id === want || i.label === want);
       },
       showTextDocument: async (document) => {
-        log.shown.push(path.relative(root, document.uri.fsPath));
+        log.shown.push(relative(document.uri.fsPath));
         const editor = visible.find((e) => e.document === document) || makeEditor(document);
         showEditors(visible.includes(editor) ? visible : [...visible, editor], editor);
         return editor;

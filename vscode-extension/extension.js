@@ -15,6 +15,7 @@ const KIND_STYLE = {
   todo: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Loose end' },
   note: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Note' }
 };
+const RETURN_SPOT_MS = 30 * 60 * 1000;
 const kindOf = (n) => (Object.prototype.hasOwnProperty.call(KIND_STYLE, n.kind) ? n.kind : 'note');
 
 function activate(context) {
@@ -86,8 +87,9 @@ function activate(context) {
     }
   }
 
+  // The writer's own documents; output panels and other views change too.
   function watched(doc) {
-    return config().get('fileTypes').includes(doc.languageId);
+    return (doc.uri.scheme === 'file' || doc.uri.scheme === 'untitled') && config().get('fileTypes').includes(doc.languageId);
   }
 
   function relPath(doc) {
@@ -168,12 +170,19 @@ function activate(context) {
     }
     tracker.recordEdit(inserted, deleted, finished);
     offer.typed();
+    walkReturn = null; // the writer is back at it
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
+    if (state.focused === windowFocused) return; // some VS Code versions also report activity changes
     windowFocused = state.focused;
-    if (!state.focused) tracker.recordBlur();
-    if (state.focused && walkReturn) showReturnSpot();
+    if (!state.focused) {
+      tracker.recordBlur();
+      if (walkReturn) walkReturn.left = true;
+    } else {
+      tracker.recordFocus();
+      if (walkReturn && walkReturn.walk && walkReturn.left) showReturnSpot();
+    }
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => paint()));
@@ -195,15 +204,18 @@ function activate(context) {
   }, 1000);
   context.subscriptions.push({ dispose: () => clearInterval(timer) });
 
-  // Break flow.
-  function rememberSpot() {
+  // Break flow. The writer's place when they chose a break is highlighted when
+  // they come back: from a walk, when the window has focus again; from a quiet
+  // panel, when they close it. It's forgotten once they edit, and after half an hour.
+  function rememberSpot(walk) {
     const editor = vscode.window.activeTextEditor;
-    if (editor) walkReturn = { uri: editor.document.uri, line: editor.selection.active.line };
+    walkReturn = editor ? { uri: editor.document.uri, line: editor.selection.active.line, at: Date.now(), walk, left: false } : null;
   }
 
   async function showReturnSpot() {
     const spot = walkReturn;
     walkReturn = null;
+    if (!spot || Date.now() - spot.at > RETURN_SPOT_MS) return;
     const doc = await vscode.workspace.openTextDocument(spot.uri);
     const editor = await vscode.window.showTextDocument(doc);
     const range = new vscode.Range(spot.line, 0, spot.line, 0);
@@ -227,10 +239,10 @@ function activate(context) {
       await vscode.env.clipboard.writeText('/margin:pause story');
       vscode.window.setStatusBarMessage('Copied "/margin:pause story". Paste it into Claude Code.', 6000);
     } else if (choice.id === 'walk') {
-      rememberSpot();
+      rememberSpot(true);
       vscode.window.setStatusBarMessage('Enjoy the walk. Your place is saved.', 8000);
     } else {
-      rememberSpot();
+      rememberSpot(false);
       openQuiet(choice.id);
     }
   }));
@@ -241,7 +253,7 @@ function activate(context) {
     const panel = vscode.window.createWebviewPanel('marginQuiet', mode === 'notice' ? 'Just notice' : 'Something quiet',
       vscode.ViewColumn.Beside, { enableScripts: true });
     panel.webview.html = quietHtml(mode);
-    panel.onDidDispose(() => { if (walkReturn) showReturnSpot(); });
+    panel.onDidDispose(() => { if (walkReturn && !walkReturn.walk) showReturnSpot(); });
   }
 
   // Notes list.
