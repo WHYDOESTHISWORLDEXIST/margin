@@ -13,15 +13,22 @@ The writer typed: `$ARGUMENTS`
 
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`
 
-2. Run the checker. The bibliography comes from the arguments, then from the `bibliography` setting, then from the first `.bib` file in the project:
+2. Run the checker. The bibliography comes from the arguments, then from the `bibliography` setting, then from the newest `.bib` file in the project:
 
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" "<draft>" "<library.bib>"`
 
    Use the draft and library they named, each in its own double quotes so a name with spaces stays one path; leave out the library if they didn't name one.
 
-3. If no library was found, say so in one line and suggest exporting one from Zotero with Better BibTeX, then saving its path with `/margin:setup`. Stop there.
+3. If the result has an `error`, say so in one line, list no keys, and stop:
+   - `no_library`: no bibliography was found. Suggest exporting one from Zotero with Better BibTeX, then saving its path with `/margin:setup`.
+   - `library_missing`: the library named in the command or in setup (`library`) isn't there.
+   - `library_empty`: Margin couldn't read any entries in `library`. Suggest checking that it's a BibTeX export.
 
-4. Report: "X of Y citations found in your library." Then, for each unresolved key, one row in a table: **Line**, **Key**, **Likely meant**, with the close match from the library or "not in library".
+   If `libraryChosenBy` is `newest` and `libraryCandidates` lists more than one file, say which one you used and that `/margin:setup` can save the right one.
+
+4. Report: "X of Y citations found in your library." Then, for each unresolved key, one row in a table: **Line**, **Key**, **Likely meant**. For **Likely meant**, give the close match from `closeMatchDetails` with its author, year and title (for example "smith2020 — Smith, 2020, Tide Mills"), or "not in library".
+
+   A key with `form: "bare"` is an @name in running text, not in [brackets] or a `\cite`: it may be a mention, like an @handle, rather than a citation. List it separately as "possible mentions", and don't fix it or queue a note for it unless the writer says it's a citation.
 
 5. Offer to fix only the keys that have a single clear close match. Ask with the AskUserQuestion tool ("Fix these", "Let me pick", "Leave them"). After approval, make exact key replacements in the draft with the Edit tool. Every edit is backed up automatically and can be undone with `/margin:review`.
 

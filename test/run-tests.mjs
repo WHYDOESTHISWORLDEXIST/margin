@@ -1043,6 +1043,75 @@ test('the check and cite skills queue notes with flags, and every skill allows i
   }
 });
 
+// --- Citations against realistic libraries and drafts (A-14/B-17/B-18, A-17, A-37) ---
+
+const citeCheck = await import(pathToFileURL(path.join(scripts, 'cite-check.mjs')).href);
+const fixtures = path.join(here, 'fixtures');
+const ALL_KEYS = 'hale2018,smith2020:deep-learning,tiny2019,doe.2019,essays2019,UPPER2018,web2021,energy2017,mueller2021,paren2016,last2022';
+
+test('BibTeX: every entry of a realistic export is found; @comment, @preamble and @string are skipped', () => {
+  const lib = citeCheck.parseBib(readText(path.join(fixtures, 'zotero-export.bib')));
+  assert([...lib.keys()].join(',') === ALL_KEYS, [...lib.keys()].join(','));
+  assert(lib.get('web2021').year === '2021' && lib.get('mueller2021').title === 'Über die Mühlen' &&
+    lib.get('hale2018').title === 'Mills of the Estuary: A History of Tide Power' && lib.get('smith2020:deep-learning').author === 'Smith, Ann and Müller, Jörg' &&
+    lib.get('tiny2019').title === 'A One-Line Entry' && lib.get('paren2016').year === '2016', JSON.stringify([...lib]));
+});
+
+test('BibTeX: a byte-order mark and Windows line endings are read normally', () => {
+  const text = '﻿' + readText(path.join(fixtures, 'zotero-export.bib')).replace(/\n/g, '\r\n');
+  assert([...citeCheck.parseBib(text).keys()].join(',') === ALL_KEYS, 'all entries expected');
+});
+
+test('citations: natbib, biblatex, multi-line and unicode forms are found; code, comments and front matter are not', () => {
+  const md = citeCheck.findCitations(readText(path.join(fixtures, 'citations.md')), 'markdown').map((c) => `${c.key}@${c.line}:${c.form}`).join(' ');
+  const expectedMd = 'smith2020:deep-learning@6:bracketed doe.2019@6:bracketed hale2018@6:bracketed web2021@7:bare müller2021@7:bracketed annwrites@8:bare ' +
+    'hale2018@10:latex doe.2019@10:latex energy2017@10:latex tiny2019@10:latex last2022@11:latex UPPER2018@11:latex essays2019@11:latex mueller2021@11:latex ' +
+    'hale2018@12:latex doe.2019@12:latex web2021@12:latex paren2016@13:latex energy2017@14:latex';
+  assert(md === expectedMd, `\n       got      ${md}\n       expected ${expectedMd}`);
+  const tex = citeCheck.findCitations(readText(path.join(fixtures, 'citations.tex')), 'tex').map((c) => `${c.key}@${c.line}`).join(' ');
+  assert(tex === 'hale2018@3 doe.2019@3 energy2017@5 tiny2019@9 last2022@9', tex);
+});
+
+test('the library is the bibliography setting, else the newest .bib, with the others listed', () => {
+  const dir = project();
+  fs.mkdirSync(path.join(dir, 'zotero-backup'));
+  const backup = path.join(dir, 'zotero-backup', '2019-library.bib');
+  fs.writeFileSync(backup, '@book{smith2020,\n  title = {Old Copy},\n  year = {2020}\n}\n');
+  const old = new Date(Date.now() - 400 * 86400000);
+  fs.utimesSync(backup, old, old);
+  const auto = JSON.parse(run('cite-check.mjs', ['drafts/ch3.md'], dir).out);
+  assert(auto.library === 'sources/library.bib' && auto.libraryChosenBy === 'newest' && auto.libraryCandidates.join() === 'sources/library.bib,zotero-backup/2019-library.bib', JSON.stringify(auto));
+  run('settings.mjs', ['set', 'bibliography', 'zotero-backup/2019-library.bib'], dir);
+  const chosen = JSON.parse(run('cite-check.mjs', ['drafts/ch3.md'], dir).out);
+  assert(chosen.library === 'zotero-backup/2019-library.bib' && chosen.libraryChosenBy === 'setting' && !chosen.libraryCandidates, JSON.stringify(chosen));
+});
+
+test('a missing or empty library is an error, not a list of every key', () => {
+  const dir = project();
+  const missing = JSON.parse(run('cite-check.mjs', ['drafts/ch3.md', 'sources/nope.bib'], dir).out);
+  assert(missing.error === 'library_missing' && missing.unresolved.length === 0, JSON.stringify(missing));
+  fs.writeFileSync(path.join(dir, 'sources', 'empty.bib'), '% nothing here yet\n');
+  const empty = JSON.parse(run('cite-check.mjs', ['drafts/ch3.md', 'sources/empty.bib'], dir).out);
+  assert(empty.error === 'library_empty' && empty.unresolved.length === 0, JSON.stringify(empty));
+  const none = project();
+  fs.rmSync(path.join(none, 'sources', 'library.bib'));
+  assert(JSON.parse(run('cite-check.mjs', ['drafts/ch3.md'], none).out).error === 'no_library', 'no library at all');
+});
+
+test('close matches come with author, year and title, each occurrence says its form, distinct keys are counted', () => {
+  const r = JSON.parse(run('cite-check.mjs', ['drafts/ch3.md'], project()).out);
+  const u = r.unresolved[0];
+  const d = u && u.closeMatchDetails[0];
+  assert(u.key === 'smtih2020' && u.form === 'latex' && d.key === 'smith2020' && d.author === 'Smith, Ann' && d.year === '2020' && d.title === 'Tide Mills', JSON.stringify(u));
+  assert(r.citations === 3 && r.distinctKeys === 3 && r.resolved === 2, JSON.stringify(r));
+});
+
+test('the cite and check skills handle library errors and bare @mentions', () => {
+  const read = (name) => fs.readFileSync(path.join(scripts, '..', 'skills', name, 'SKILL.md'), 'utf8');
+  for (const word of ['library_missing', 'library_empty', 'no_library', 'closeMatchDetails', 'form: "bare"', 'libraryCandidates']) assert(read('cite').includes(word), `cite: ${word}`);
+  for (const word of ['error', 'form: "bare"']) assert(read('check').includes(word), `check: ${word}`);
+});
+
 test('pause tracker: idle time and paragraph ends count as pauses', () => {
   let t = 0;
   const tracker = new PauseTracker({ pauseMs: 8000, stuckMs: 180000, now: () => t });
