@@ -350,7 +350,7 @@ test('a --project value that was never filled in is ignored', () => {
 
 test('a project folder Claude Code names is the project, even inside a folder with its own .margin (A2-01)', () => {
   const dir = project();
-  run('focus.mjs', ['add', 'drafts'], dir);
+  run('focus.mjs', ['add', 'notes/interviews.md'], dir);   // the parent's list leaves drafts/ out
   // A session whose project is the subfolder drafts/ is its own project, as the companion sees it.
   const res = hookWithProjectDir(path.join(dir, 'drafts'), path.join(dir, 'drafts'), 'Read', { file_path: path.join(dir, 'drafts', 'ch3.md') });
   assert(res.code === 0 && res.out === '', `the parent's focus list should not apply: ${res.out}${res.err}`);
