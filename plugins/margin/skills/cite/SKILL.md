@@ -30,6 +30,8 @@ The writer typed: `$ARGUMENTS`
 
 4. Report: "X of Y citations found in your library." Then, for each unresolved key, one row in a table: **Line**, **Key**, **Likely meant**. For **Likely meant**, give the close match from `closeMatchDetails` with its author, year and title (for example "smith2020 — Smith, 2020, Tide Mills"), or "not in library".
 
+   pandoc-crossref labels (`@fig:`, `@tbl:`, `@eq:`, `@sec:`, `@lst:`) are not counted as citations unless the library has such a key, and `\Cite`-style commands count like `\cite`.
+
    A key with `form: "bare"` is an @name in running text, not in [brackets] or a `\cite`: it may be a mention, like an @handle, rather than a citation. List it separately as "possible mentions", and don't fix it or queue a note for it unless the writer says it's a citation.
 
 5. Offer to fix only the keys that have a single clear close match. Ask with the AskUserQuestion tool ("Fix these", "Let me pick", "Leave them"). After approval, make exact key replacements in the draft with the Edit tool; Claude Code may ask the writer to allow each edit. Every edit is backed up automatically and can be undone with `/margin:review`. If Claude Code asks whether to go ahead because Margin couldn't back the file up first, say so plainly and let the writer decide.

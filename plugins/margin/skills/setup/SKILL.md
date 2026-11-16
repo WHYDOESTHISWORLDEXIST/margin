@@ -29,4 +29,6 @@ Help the writer set up Margin in a minute or two. They should never have to open
    - `/margin:pause` for a short break whenever they want one
    - `/margin:review` to see and undo anything Claude changed
 
+Margin works in the project folder Claude Code is open in. A project inside a folder where Margin was used before is a project of its own, with its own settings, focus list, notes and backups.
+
 Mention once that `.margin/` holds Margin's settings, backups and notes, and they may want to add it to `.gitignore`. Don't change `.gitignore` yourself unless they say so.

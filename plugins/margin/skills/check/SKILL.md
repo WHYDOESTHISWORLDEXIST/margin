@@ -38,7 +38,7 @@ Queue every finding at once, with the draft's line number. Each note starts with
 
 Put each value in straight double quotes. Inside a message, quote with ‘single curly quotes’ and write apostrophes as ’; never use double quotes of any kind (" “ ”), `$` or backticks, so the command works the same in every shell. Keep each message under about 25 words and factual. No praise, no ‘consider rewriting’.
 
-Running the check again is safe: a note that is already queued, or that the writer dismissed, is not added again, even if you word it differently (same file, kind, line and `--source`), so always give `--source` when a note points at another place. The command says how many were new ("3 new, 2 already queued or dismissed"); report only the new ones.
+Running the check again is safe: a note that is already queued, or that the writer dismissed, is not added again, even if you word it differently (same file, kind, line and `--source`), so always give `--source` when a note points at another place. The same finding at several places is kept for each place. The command says how many were new ("3 new, 2 already queued or dismissed"); report only the new ones.
 
 ## 4. Report
 
