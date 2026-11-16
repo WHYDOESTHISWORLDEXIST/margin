@@ -1773,6 +1773,27 @@ test('identical notes at different lines are each queued, and a re-run still add
   assert(fourth.out.startsWith('1 new, 3 already queued or dismissed. 3 open in total.') && items().map((i) => i.line).join() === '1,3,4,9', `${fourth.out} ${items().map((i) => i.line)}`);
 });
 
+test('the same finding worded differently, at the same line and source, is not added again (B2-09)', () => {
+  const dir = project();
+  const add = (message, extra = ['--line', '12', '--source', 'notes/interviews.md:40']) => run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', ...extra, '--kind', 'contradiction', '--message', message], dir);
+  const items = () => JSON.parse(fs.readFileSync(marginPath(dir, 'suggestions.json'), 'utf8')).items;
+  assert(add('Says 1871 here; notes/interviews.md:40 says 1874.').out.startsWith('1 new, 0 already queued or dismissed. 1 open in total.'), 'first run');
+  const reworded = add('This says 1871, but notes/interviews.md:40 says 1874.');
+  assert(reworded.out.startsWith('0 new, 1 already queued or dismissed. 1 open in total.') && items().length === 1, reworded.out);
+  // Dismissed stays dismissed, reworded or not.
+  run('suggestions.mjs', ['dismiss', items()[0].id], dir);
+  assert(add('The year here is 1871; the interview says 1874.').out.startsWith('0 new, 1 already queued or dismissed. 0 open in total.'), 'dismissed, reworded');
+  // A different line, a different source, no source, or another kind is a different finding.
+  assert(add('A different line.', ['--line', '13', '--source', 'notes/interviews.md:40']).out.startsWith('1 new,'), 'other line');
+  assert(add('A different source.', ['--line', '12', '--source', 'notes/interviews.md:41']).out.startsWith('1 new,'), 'other source');
+  assert(add('No source at all.', ['--line', '12']).out.startsWith('1 new,'), 'no source');
+  assert(add('No source at all.', ['--line', '12']).out.startsWith('0 new,'), 'no source: identical wording repeats');
+  assert(add('No source, reworded.', ['--line', '12']).out.startsWith('1 new,'), 'no source: a reworded note is not matched');
+  // Two different messages for one line and source in a single command are both kept.
+  const both = run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--line', '30', '--kind', 'citation', '--source', 's.md:1', '--message', 'First thing.', '--file', 'drafts/ch3.md', '--line', '30', '--kind', 'citation', '--source', 's.md:1', '--message', 'Second thing.'], dir);
+  assert(both.out.startsWith('2 new,'), both.out);
+});
+
 // B-28: one unreadable thing, a bad argument or a tools folder must not spoil the inventory.
 test('inventory: a bad folder argument gets a clear message; a folder outside the project is refused (B-28)', () => {
   const dir = project();

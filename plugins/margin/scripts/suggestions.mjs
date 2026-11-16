@@ -35,7 +35,11 @@ const view = (i) => ({
 // Rules for "the same note at the same place". They are tried first, and they also
 // merge repeats within one command.
 const SAME_PLACE = [
-  (a, b) => a.key === b.key && a.line === b.line
+  (a, b) => a.key === b.key && a.line === b.line,
+  // The same finding worded differently: Claude words a note afresh each run, so the same
+  // file, kind, line and (non-empty) source is the same finding. Only against notes already
+  // stored: inside one command two different messages at one line stay two notes.
+  Object.assign((a, b) => a.file === b.file && a.kind === b.kind && a.line === b.line && a.source !== null && a.source === b.source, { rewording: true })
 ];
 // Rules for "the same note, somewhere else" (it moved): tried only after every
 // same-place match, so a note isn't taken by a look-alike elsewhere.
@@ -47,7 +51,7 @@ function findRepeats(fresh, storedItems) {
   const stored = storedItems.map((i) => ({ v: view(i), used: false }));
   const repeats = new Set();
   fresh.forEach((f, k) => {
-    if (fresh.slice(0, k).some((g) => !repeats.has(g) && SAME_PLACE.some((rule) => rule(f.v, g.v)))) repeats.add(f);
+    if (fresh.slice(0, k).some((g) => !repeats.has(g) && SAME_PLACE.some((rule) => !rule.rewording && rule(f.v, g.v)))) repeats.add(f);
   });
   for (const rules of [SAME_PLACE, SAME_NOTE]) {
     for (const f of fresh) {
