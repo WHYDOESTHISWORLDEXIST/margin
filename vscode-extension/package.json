@@ -27,7 +27,7 @@
           "minimum": 2,
           "description": "Seconds without typing that count as a natural pause. Held notes appear at a pause."
         },
-        "margin.stuckMinutes": {
+        "margin.quietMinutes": {
           "type": "number",
           "default": 3,
           "minimum": 1,

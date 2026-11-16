@@ -25,9 +25,22 @@ function activate(context) {
   const config = () => vscode.workspace.getConfiguration('margin');
   // A setting that is missing or not a positive number falls back to its default.
   const positive = (key, fallback) => { const v = Number(config().get(key)); return Number.isFinite(v) && v > 0 ? v : fallback; };
+  // margin.quietMinutes used to be called margin.stuckMinutes. Someone who only set the old
+  // key keeps their value: it is used when the new key has no value of its own.
+  const hasOwnValue = (key) => {
+    const i = typeof config().inspect === 'function' ? config().inspect(key) : null;
+    return Boolean(i) && [i.globalValue, i.workspaceValue, i.workspaceFolderValue].some((v) => v !== undefined);
+  };
+  const quietMinutes = () => {
+    if (!hasOwnValue('quietMinutes')) {
+      const old = Number(config().get('stuckMinutes'));
+      if (Number.isFinite(old) && old > 0) return old;
+    }
+    return positive('quietMinutes', 3);
+  };
   const tracker = new PauseTracker({
     pauseMs: positive('pauseSeconds', 8) * 1000,
-    stuckMs: positive('stuckMinutes', 3) * 60 * 1000
+    stuckMs: quietMinutes() * 60 * 1000
   });
   const offer = new BreakOffer();
   const revealed = new Set();
@@ -235,7 +248,7 @@ function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
     if (!e.affectsConfiguration('margin')) return;
     tracker.pauseMs = positive('pauseSeconds', 8) * 1000;
-    tracker.stuckMs = positive('stuckMinutes', 3) * 60 * 1000;
+    tracker.stuckMs = quietMinutes() * 60 * 1000;
     refresh();
   }));
 

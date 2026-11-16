@@ -8,7 +8,7 @@ const Module = require('module');
 const path = require('path');
 
 const EXTENSION_DIR = path.join(__dirname, '..', 'vscode-extension');
-const DEFAULT_CONFIG = { pauseSeconds: 8, stuckMinutes: 3, suggestBreaks: true, fileTypes: ['markdown', 'plaintext', 'latex'] };
+const DEFAULT_CONFIG = { pauseSeconds: 8, quietMinutes: 3, suggestBreaks: true, fileTypes: ['markdown', 'plaintext', 'latex'] };
 
 class Position { constructor(line, character) { this.line = line; this.character = character; } }
 class Range {
@@ -36,6 +36,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
   const listeners = { edit: [], windowState: [], visible: [], config: [] };
   const on = (list) => (cb) => { list.push(cb); return { dispose() { const i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); } }; };
   const settings = { ...DEFAULT_CONFIG, ...config };
+  const explicit = new Set(Object.keys(config)); // the settings the writer has set themselves
   const relative = (fsPath) => path.relative(root, fsPath).split(path.sep).join('/');
   const answers = [];
   const commands = {};
@@ -80,7 +81,10 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
     OverviewRulerLane: { Left: 1 }, StatusBarAlignment: { Left: 1, Right: 2 }, TextEditorRevealType: { InCenter: 2 }, ViewColumn: { Beside: -2 },
     workspace: {
       workspaceFolders: root ? [{ uri: Uri.file(root), name: path.basename(root), index: 0 }] : undefined,
-      getConfiguration: (section) => ({ get: (key) => { log.settingsRead.add(`${section}.${key}`); return settings[key]; } }),
+      getConfiguration: (section) => ({
+        get: (key) => { log.settingsRead.add(`${section}.${key}`); return settings[key]; },
+        inspect: (key) => ({ key: `${section}.${key}`, defaultValue: DEFAULT_CONFIG[key], globalValue: explicit.has(key) ? settings[key] : undefined })
+      }),
       onDidChangeTextDocument: on(listeners.edit),
       onDidChangeConfiguration: on(listeners.config),
       createFileSystemWatcher(pattern) {
@@ -166,7 +170,7 @@ function createWorld({ root, docs = ['drafts/ch3.md'], config = {}, focused = tr
     close(editor) { const rest = visible.filter((e) => e !== editor); showEditors(rest, rest.includes(active) ? active : rest[0] || null); },
     fileChanged(rel, kind = 'change') { for (const w of watchers) if (w.pattern === rel) for (const cb of [...w[kind]]) cb(Uri.file(path.join(root, rel))); },
     // The writer changes a margin.* setting; VS Code tells the extension.
-    changeSetting(key, value) { settings[key] = value; for (const cb of [...listeners.config]) cb({ affectsConfiguration: (section) => section === 'margin' || section === `margin.${key}` }); },
+    changeSetting(key, value) { settings[key] = value; explicit.add(key); for (const cb of [...listeners.config]) cb({ affectsConfiguration: (section) => section === 'margin' || section === `margin.${key}` }); },
     answer(...picks) { answers.push(...picks); },
     run: (id, ...args) => commands[id](...args),
     settle: async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); },

@@ -1485,7 +1485,7 @@ await atest('companion: activates, registers every command it contributes, and r
   assert(JSON.stringify(Object.keys(world.commands).sort()) === JSON.stringify(contributed), `registered ${Object.keys(world.commands)}, contributed ${contributed}`);
   world.tick(5);
   const declared = Object.keys(pkg.contributes.configuration.properties);
-  const undeclared = [...world.log.settingsRead].filter((k) => !declared.includes(k));
+  const undeclared = [...world.log.settingsRead].filter((k) => !declared.includes(k) && k !== 'margin.stuckMinutes'); // the old name of quietMinutes, read only as a fallback
   assert(world.log.settingsRead.size && !undeclared.length, `undeclared settings read: ${undeclared}`);
 }));
 
@@ -1906,7 +1906,7 @@ test('cite-check output is unchanged for the sample draft: close matches and the
 });
 
 // B-27: settings take effect without a reload; dismissing a note replaces the file in one step.
-await atest('companion: a change to pauseSeconds, stuckMinutes or suggestBreaks takes effect without a reload (B-27)', () =>
+await atest('companion: a change to pauseSeconds, quietMinutes or suggestBreaks takes effect without a reload (B-27)', () =>
   withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5)] }, (world) => {
     // pauseSeconds 8 -> 30: a note stays held through 12 quiet seconds, and shows after 30.
     world.changeSetting('pauseSeconds', 30);
@@ -1914,8 +1914,8 @@ await atest('companion: a change to pauseSeconds, stuckMinutes or suggestBreaks 
     assert(!world.dots().length, 'still held at 12 s with a 30 s pause');
     world.tick(20);
     assert(JSON.stringify(world.dots()) === '[4]', `shown after 30 s: ${world.dots()}`);
-    // stuckMinutes 3 -> 1: the break offer appears after one quiet minute instead of three.
-    world.changeSetting('stuckMinutes', 1);
+    // quietMinutes 3 -> 1: the break offer appears after one quiet minute instead of three.
+    world.changeSetting('quietMinutes', 1);
     world.type('a'); world.tick(40);
     assert(!/break\?/.test(world.status.text), 'not yet after 40 s');
     world.tick(40);
@@ -1927,12 +1927,36 @@ await atest('companion: a change to pauseSeconds, stuckMinutes or suggestBreaks 
     // A nonsense value falls back to the default instead of breaking the timing.
     world.changeSetting('suggestBreaks', true);
     world.changeSetting('pauseSeconds', 'soon');
-    world.changeSetting('stuckMinutes', -4);
+    world.changeSetting('quietMinutes', -4);
     world.type('a'); world.tick(9);
     assert(!/break\?/.test(world.status.text), 'default timings after nonsense values');
     world.tick(200);
     assert(/break\?/.test(world.status.text), 'default 3 minutes still offers a break');
   }));
+
+// A2-08/B2-13: the setting was renamed from stuckMinutes to quietMinutes; the old key still works.
+await atest('companion: a writer who only set the old margin.stuckMinutes keeps their value; quietMinutes wins when both are set (A2-08)', async () => {
+  await withCompanion({ config: { stuckMinutes: 1 } }, (world) => {
+    world.type('a'); world.tick(40);
+    assert(!/break?/.test(world.status.text), 'not yet after 40 s');
+    world.tick(40);
+    assert(/break?/.test(world.status.text), `the old key still sets one minute: ${world.status.text}`);
+  });
+  await withCompanion({}, (world) => {
+    // Changed while running: the old key applies without a reload too, until the new key has a value.
+    world.changeSetting('stuckMinutes', 1);
+    world.type('a'); world.tick(80);
+    assert(/break?/.test(world.status.text), `old key changed while running: ${world.status.text}`);
+  });
+  await withCompanion({ config: { stuckMinutes: 1, quietMinutes: 5 } }, (world) => {
+    world.type('a'); world.tick(80);
+    assert(!/break?/.test(world.status.text), 'the new key wins over the old one');
+    world.tick(240);
+    assert(/break?/.test(world.status.text), 'and offers after its five minutes');
+  });
+  const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'vscode-extension', 'package.json'), 'utf8')).contributes.configuration.properties;
+  assert(pkg['margin.quietMinutes'] && !pkg['margin.stuckMinutes'], 'package.json declares quietMinutes only');
+});
 
 await atest('companion: dismissing a note re-reads the file, keeps notes added meanwhile, and leaves no temp file (B-27)', () =>
   withCompanion({ notes: [companionNote('n1', 'drafts/ch3.md', 5), companionNote('n2', 'drafts/ch3.md', 9)] }, async (world, dir) => {
@@ -2214,7 +2238,7 @@ test('copy lint: no text the writer can read says they are stuck or stalled', ()
     'vscode-extension/package.json',
     ...fs.readdirSync(path.join(repo, 'plugins', 'margin', 'skills')).map((n) => `plugins/margin/skills/${n}/SKILL.md`)
   ];
-  // Internal names such as stuckMinutes stay: the patterns need a word boundary.
+  // Internal names such as stuckMs stay: the patterns need a word boundary.
   const banned = /\b(?:stuck|unstuck|stall|stalls|stalled|stalling)\b/i;
   const phrases = /\bseems? (?:to be )?(?:stuck|stalled|struggling)\b|\byou(?:'|’)?(?:re| are| have been|'ve been) (?:stuck|stalled|struggling)\b/i;
   const check = (where, text) => {
@@ -2230,7 +2254,7 @@ test('copy lint: no text the writer can read says they are stuck or stalled', ()
   for (const bad of ['when you seem stuck', "you're stuck", 'you’ve been stuck a while', 'if you have stalled', 'a break when stuck', 'help getting unstuck']) {
     assert(banned.test(bad) || phrases.test(bad), `the lint should catch: ${bad}`);
   }
-  assert(!banned.test('margin.stuckMinutes') && !banned.test('const stuckMs'), 'internal names are allowed');
+  assert(!banned.test('const stuckMs') && !banned.test('tracker.stuckMs'), 'internal names are allowed');
 });
 
 console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
