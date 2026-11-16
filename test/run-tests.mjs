@@ -1970,6 +1970,32 @@ const KNOWN_TOOLS = ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'MultiEdit', 'Note
 const WRITE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 const KNOWN_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'UserPromptSubmit'];
 
+// The three wiring tests run hooks.json's command strings through `sh -c`, as Claude Code
+// does where it has a Bash. Without an sh they are skipped with a clear message, not failed.
+const hasSh = (() => { const r = spawnSync('sh', ['-c', 'echo hi'], { encoding: 'utf8', timeout: 20000 }); return !r.error && r.status === 0; })();
+let skipped = 0;
+function wiringTest(name, fn) {
+  if (hasSh) return test(name, fn);
+  skipped++;
+  console.log(`skip ${name} (no sh on PATH; install Git for Windows)`);
+}
+
+// The hooks run on the Node that runs the tests. Its folder goes first on PATH, behind a
+// `node` shim: Git's sh looks for a plain `node` file before `node.exe`, so it would
+// otherwise pick another Node that is installed as a plain `node` further along the PATH.
+let nodeShim = null;
+function pathWithThisNode() {
+  if (!nodeShim) {
+    nodeShim = fs.mkdtempSync(path.join(os.tmpdir(), 'margin-node-shim-'));
+    made.push(nodeShim);
+    fs.writeFileSync(path.join(nodeShim, 'node'), `#!/bin/sh
+exec "${process.execPath.split(path.sep).join('/')}" "$@"
+`, { mode: 0o755 });
+  }
+  const key = Object.keys(process.env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  return { key, value: [nodeShim, path.dirname(process.execPath), process.env[key] || ''].filter(Boolean).join(path.delimiter) };
+}
+
 let pluginCopy = null;
 function wiredPluginRoot() {
   if (!pluginCopy) {
@@ -1988,7 +2014,7 @@ function shellCommand(command, dir, input) {
   const res = spawnSync('sh', ['-c', command.split('${CLAUDE_PLUGIN_ROOT}').join(root)], {
     cwd: dir,
     input: input === undefined ? '' : JSON.stringify(input),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_PLUGIN_ROOT: root },
+    env: { ...process.env, [pathWithThisNode().key]: pathWithThisNode().value, CLAUDE_PROJECT_DIR: dir, CLAUDE_PLUGIN_ROOT: root },
     encoding: 'utf8',
     timeout: 20000
   });
@@ -2012,9 +2038,11 @@ const wiredOk = (runs, label) => {
 const wiredDecision = (runs) => runs.map((r) => (r.out.trim() ? JSON.parse(r.out).hookSpecificOutput.permissionDecision : 'allow')).find((d) => d !== 'allow') || 'allow';
 const pendingIds = (dir) => (fs.existsSync(marginPath(dir, 'history/pending')) ? fs.readdirSync(marginPath(dir, 'history/pending')) : []);
 
-test('hooks.json as shipped: every event works through sh, with spaces in the plugin and project paths (A-32)', () => {
+wiringTest('hooks.json as shipped: every event works through sh, with spaces in the plugin and project paths (A-32)', () => {
   const dir = project();
   assert(dir.includes(' ') && wiredPluginRoot().includes(' '), 'both paths should contain a space');
+  const wiredNode = shellCommand('node -p "process.version"', dir);
+  assert(wiredNode.out.trim() === process.version, `wired hooks should run on the Node under test (${process.version}), not ${wiredNode.out.trim()}`);
   setUp(dir);
   run('focus.mjs', ['add', 'drafts'], dir);
   const file = path.join(dir, 'drafts', 'ch3.md');
@@ -2051,7 +2079,7 @@ test('hooks.json as shipped: every event works through sh, with spaces in the pl
   assert(JSON.parse(prompt[0].out).hookSpecificOutput.additionalContext.includes('drafts'), prompt[0].out);
 });
 
-test('hooks.json lint: events and matchers name known tools, and each event’s script handles every one of them (A-32)', () => {
+wiringTest('hooks.json lint: events and matchers name known tools, and each event’s script handles every one of them (A-32)', () => {
   for (const event of Object.keys(hooksJson)) assert(KNOWN_EVENTS.includes(event), `unknown hook event ${event}`);
   const scriptOf = (h) => /^node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([\w-]+\.mjs)"$/.exec(h.command);
   for (const [event, groups] of Object.entries(hooksJson)) {
@@ -2125,7 +2153,7 @@ test('hooks.json lint: events and matchers name known tools, and each event’s 
   }
 });
 
-test('skills lint: frontmatter parses, scripts exist, and every script command passes the project folder (A-32)', () => {
+wiringTest('skills lint: frontmatter parses, scripts exist, and every script command passes the project folder (A-32)', () => {
   const skillsDir = path.join(scripts, '..', 'skills');
   const names = fs.readdirSync(skillsDir).sort();
   assert(names.length >= 7, `expected the seven skills, found ${names}`);
@@ -2205,5 +2233,5 @@ test('copy lint: no text the writer can read says they are stuck or stalled', ()
   assert(!banned.test('margin.stuckMinutes') && !banned.test('const stuckMs'), 'internal names are allowed');
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
+console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
 process.exit(failed ? 1 : 0);
