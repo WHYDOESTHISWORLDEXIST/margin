@@ -684,6 +684,38 @@ test('backups younger than 30 days are never cleared, even over the cap', () => 
   assert(logEntries(dir).every((e) => e.snapshot && !e.pruned) && backupFiles(dir).length === 4, 'all recent backups should stay');
 });
 
+test('a young backup is kept even when its log line is damaged or the log is gone (B2-06)', () => {
+  const tiny = { MARGIN_TEST_HISTORY_CAP: '10', MARGIN_TEST_PRUNE_EVERY: '1' };
+  const makeProject = (label) => {
+    const dir = project();
+    setUp(dir);
+    for (let n = 1; n <= 4; n++) claudeEdits(dir, 'drafts/ch3.md', `toolu_${label}${n}`, `${label} ${n}\n`, tiny);
+    return dir;
+  };
+  // One log line is unreadable: its backup is not mentioned in the log, but it is young.
+  const damaged = makeProject('dmg');
+  const before = backupFiles(damaged).length;
+  const lines = readText(marginPath(damaged, 'log.jsonl')).trim().split('\n');
+  lines[1] = lines[1].slice(0, 30);
+  fs.writeFileSync(marginPath(damaged, 'log.jsonl'), lines.join('\n') + '\n');
+  claudeEdits(damaged, 'drafts/ch3.md', 'toolu_dmg5', 'dmg 5\n', tiny);
+  assert(backupFiles(damaged).length === before + 1, `no young backup should be cleared: ${before} before, ${backupFiles(damaged).length} after one more edit`);
+  // The log is gone altogether.
+  const gone = makeProject('gone');
+  const count = backupFiles(gone).length;
+  fs.rmSync(marginPath(gone, 'log.jsonl'));
+  claudeEdits(gone, 'drafts/ch3.md', 'toolu_gone5', 'gone 5\n', tiny);
+  assert(backupFiles(gone).length === count + 1, `no young backup should be cleared without a log: ${count} before, ${backupFiles(gone).length} after`);
+  // An old backup nobody mentions can still go when the folder is over the cap.
+  const old = makeProject('old');
+  const oldCount = backupFiles(old).length;
+  fs.rmSync(marginPath(old, 'log.jsonl'));
+  const longAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  for (const name of backupFiles(old)) fs.utimesSync(marginPath(old, `history/${name}`), longAgo, longAgo);
+  claudeEdits(old, 'drafts/ch3.md', 'toolu_old5', 'old 5\n', tiny);
+  assert(backupFiles(old).length < oldCount + 1, `old unreferenced backups should be cleared over the cap: ${oldCount} before, ${backupFiles(old).length} after`);
+});
+
 test('a failed or refused edit leaves no backup or pending record behind', () => {
   for (const event of ['PostToolUseFailure', 'PermissionDenied']) {
     const dir = project();

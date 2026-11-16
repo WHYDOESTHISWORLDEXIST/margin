@@ -114,6 +114,9 @@ export function tidyHistory(root, now = Date.now()) {
     if (total <= LIMITS.capBytes) return;
 
     const keep = pendingBackups(root);
+    // A backup the log doesn't mention (its line is damaged, or the log is gone) is
+    // judged by its own age, so "younger than 30 days is always kept" holds for it too.
+    for (const f of files) if (!refs.has(f.key) && now - f.mtimeMs < LIMITS.keepMs) keep.add(f.key);
     const byFile = new Map();
     for (const c of changes) {
       if (typeof c.e.snapshot !== 'string') continue;
