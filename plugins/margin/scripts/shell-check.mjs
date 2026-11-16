@@ -66,6 +66,23 @@ const QUIET = new Set([
   'start-process', 'saps', 'get-command', 'gcm', 'get-help', 'clear-host', 'cls', 'get-filehash', 'compare-object',
   'get-process', 'gps', 'get-service', 'get-variable', 'set-variable', 'new-object', 'add-type', 'out-default'
 ]);
+// git subcommands that change or report state without printing a file's contents. The
+// ones that can (diff, show, log, grep, blame, cat-file, ...) are not listed, so they
+// still ask when they name a file outside the list.
+const QUIET_GIT = new Set(['add', 'rm', 'mv', 'commit', 'restore', 'checkout', 'switch', 'reset', 'status', 'push', 'pull', 'fetch', 'tag', 'branch', 'init', 'clone', 'merge', 'rebase', 'clean']);
+const GIT_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
+
+function gitSubcommand(args) {
+  for (let k = 0; k < args.length; k++) {
+    const t = args[k].text;
+    if (args[k].dynamic) return null;
+    if (GIT_OPTIONS_WITH_VALUE.has(t)) { k++; continue; }
+    if (t.startsWith('-')) continue;
+    return t;
+  }
+  return null;
+}
+
 const CD = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
 const PUSH = new Set(['pushd', 'push-location']);
 const POP = new Set(['popd', 'pop-location']);
@@ -450,7 +467,8 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (w.dynamic || !w.text || DEVICE.test(w.text)) return;
     let text = w.text;
     if (/^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
-    if (!/[\\/]/.test(text) && !/^\.\.?$/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
+    if (/^\.\.?$/.test(text)) return; // a bare "." or ".." is the current folder: "git add .", "pip install ."
+    if (!/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
     const p = resolvePath(w.glob ? globFolder(text) : text, cwd);
     if (p !== null && statOf(p)) out.named.push({ path: p, program });
   }
@@ -548,6 +566,8 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       return undefined;
     }
     if (LISTERS.has(prog) || (QUIET.has(prog) && !(ps && PS_READERS.has(prog)))) return undefined;
+
+    if (prog === 'git' && QUIET_GIT.has(gitSubcommand(args))) return undefined;
 
     const readers = ps ? PS_READERS : POSIX_READERS;
     if (!readers.has(prog)) { for (const w of args) named(w, cwd, prog); return undefined; }

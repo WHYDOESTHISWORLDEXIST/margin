@@ -1046,7 +1046,14 @@ const SHELL_TABLE = [
   // B2-03: device files hold no text of the writer's, whether or not they exist on this OS.
   ['bash', 'cat < /dev/null', 'allow'], ['bash', 'grep x /dev/null', 'allow'], ['bash', 'diff drafts/ch3.md /dev/null', 'allow'],
   ['bash', 'npm test < /dev/null', 'allow'], ['bash', 'head -c 10 /dev/urandom', 'allow'], ['bash', 'cat /dev/stdin', 'allow'],
-  ['bash', 'cat /dev/fd/3', 'allow'], ['bash', 'cat /dev/null notes/private.md', 'deny'], ['bash', 'cat /dev/nullx', 'allow']
+  ['bash', 'cat /dev/fd/3', 'allow'], ['bash', 'cat /dev/null notes/private.md', 'deny'], ['bash', 'cat /dev/nullx', 'allow'],
+  // B2-04: git commands that print no file contents, and a bare "." , don't ask; the ones that can still do.
+  ['bash', 'git add .', 'allow'], ['bash', 'git status .', 'allow'], ['bash', 'git checkout -- notes/private.md', 'allow'],
+  ['bash', 'pip install .', 'allow'], ['bash', 'git add -A . && git commit -m "x"', 'allow'], ['bash', 'git -C notes status', 'allow'],
+  ['bash', 'git -c core.quotepath=off add notes/private.md', 'allow'], ['bash', 'git mv notes/private.md archive/p.md', 'allow'],
+  ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'git show HEAD:notes/private.md', 'allow'], ['bash', 'git blame notes/private.md', 'ask'],
+  ['bash', 'git log -p notes/private.md', 'ask'], ['bash', 'git stash show notes/private.md', 'ask'], ['bash', 'git diff --no-index /dev/null notes/private.md', 'ask'],
+  ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {
