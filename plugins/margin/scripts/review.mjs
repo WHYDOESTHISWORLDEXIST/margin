@@ -160,6 +160,7 @@ if (command === 'list') {
   const idArg = args.slice(1).find((a) => a !== '--go-ahead');
   const id = Number(idArg);
   if (!Number.isInteger(id) || id < 1) { say(`No change #${idArg ?? ''}.`); process.exit(1); }
+  if (!fs.existsSync(marginDir(root))) { say('Claude has not changed any files yet.'); process.exit(1); }
   process.exit(withLock(root, 'log', () => undo(id, goAhead)));
 } else {
   say('Use "list" or "undo <number> [--go-ahead]".');

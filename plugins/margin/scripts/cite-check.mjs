@@ -282,7 +282,12 @@ function main() {
   if (!draftArg) { console.log('Usage: node cite-check.mjs <draft> [library.bib]'); process.exit(1); }
   const draftPath = path.resolve(root, draftArg);
   const kind = /\.(tex|ltx|latex)$/i.test(draftPath) ? 'tex' : 'markdown';
-  const citations = findCitations(fs.readFileSync(draftPath, 'utf8'), kind);
+  let draftText;
+  try { draftText = fs.readFileSync(draftPath, 'utf8'); } catch {
+    console.log(`There is no draft named "${draftArg}" in this project.`);
+    process.exit(1);
+  }
+  const citations = findCitations(draftText, kind);
 
   const report = { draft: rel(root, draftPath), library: null, libraryChosenBy: null };
   let bibPath = null;

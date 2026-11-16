@@ -17,7 +17,7 @@ Before anything else, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --p
 
 - Read the draft.
 - Read the writer's earlier notes from the notes folder. If focus is on, use only what focus allows; don't try to get around the guard.
-- Run the citation check: `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" "<draft>"`. If it reports an `error` (`no_library`, `library_missing`, `library_empty`), skip citation-key findings and say in one line that the library couldn't be used. An unresolved key with `form: "bare"` (an @name in running text) may be a mention rather than a citation; only note it if the context shows it's a citation.
+- Run the citation check: `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" "<draft>"`. If it says there is no draft by that name, tell the writer in one line and stop. If it reports an `error` (`no_library`, `library_missing`, `library_empty`), skip citation-key findings and say in one line that the library couldn't be used. An unresolved key with `form: "bare"` (an @name in running text) may be a mention rather than a citation; only note it if the context shows it's a citation.
 
 ## 2. Look for
 

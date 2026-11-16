@@ -716,6 +716,19 @@ test('a young backup is kept even when its log line is damaged or the log is gon
   assert(backupFiles(old).length < oldCount + 1, `old unreferenced backups should be cleared over the cap: ${oldCount} before, ${backupFiles(old).length} after`);
 });
 
+test('undo with no .margin folder says so in one line and creates nothing (B2-07)', () => {
+  const dir = project();
+  const res = run('review.mjs', ['undo', '1'], dir);
+  assert(res.code === 1 && res.out.trim() === 'Claude has not changed any files yet.' && res.err === '', `${res.out}${res.err}`);
+  assert(!fs.existsSync(path.join(dir, '.margin')), 'nothing should be created');
+});
+
+test('cite-check with a draft that does not exist says so in one line (B2-07)', () => {
+  const dir = project();
+  const res = run('cite-check.mjs', ['drafts/nope.md'], dir);
+  assert(res.code === 1 && res.out.trim() === 'There is no draft named "drafts/nope.md" in this project.' && res.err === '', `${res.out}${res.err}`);
+});
+
 test('a failed or refused edit leaves no backup or pending record behind', () => {
   for (const event of ['PostToolUseFailure', 'PermissionDenied']) {
     const dir = project();
