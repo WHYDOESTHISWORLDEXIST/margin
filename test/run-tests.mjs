@@ -1042,7 +1042,11 @@ const SHELL_TABLE = [
   // A2-04: PowerShell switch aliases and abbreviations (gci -r is -Recurse).
   ['powershell', 'gci -r drafts | sls mill', 'allow'], ['powershell', 'ls drafts -r -Filter *.md | sls mill', 'allow'],
   ['powershell', 'Get-ChildItem -Rec -Path drafts | Select-String mill', 'allow'], ['powershell', 'gci -af -r drafts | sls mill', 'allow'],
-  ['powershell', 'gci -r | sls mill', 'deny'], ['powershell', 'gci -s notes | sls mill', 'deny']
+  ['powershell', 'gci -r | sls mill', 'deny'], ['powershell', 'gci -s notes | sls mill', 'deny'],
+  // B2-03: device files hold no text of the writer's, whether or not they exist on this OS.
+  ['bash', 'cat < /dev/null', 'allow'], ['bash', 'grep x /dev/null', 'allow'], ['bash', 'diff drafts/ch3.md /dev/null', 'allow'],
+  ['bash', 'npm test < /dev/null', 'allow'], ['bash', 'head -c 10 /dev/urandom', 'allow'], ['bash', 'cat /dev/stdin', 'allow'],
+  ['bash', 'cat /dev/fd/3', 'allow'], ['bash', 'cat /dev/null notes/private.md', 'deny'], ['bash', 'cat /dev/nullx', 'allow']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

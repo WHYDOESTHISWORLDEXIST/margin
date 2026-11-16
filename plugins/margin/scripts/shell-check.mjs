@@ -365,6 +365,10 @@ function resolvePath(text, cwd) {
   return cwd ? path.resolve(cwd, t) : null;
 }
 
+// Special device files hold none of the writer's text: `< /dev/null`, `diff x /dev/null`.
+// Judged by the name as typed, so it holds on every OS whether or not the file exists.
+const DEVICE = /^\/dev\/(?:null|zero|full|stdin|stdout|stderr|tty|random|urandom|fd\/\d+)$/;
+
 const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
 
 // The folder part of a wildcard path ("notes/*.md" -> "notes", "*/x.md" -> ".").
@@ -424,6 +428,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
   // A word a reader would open: a file, a folder searched recursively, or a wildcard.
   function readTarget(w, cwd, program, recursive) {
     if (w.dynamic) { out.unknown.push({ word: w.text || '(a variable)', program }); return; }
+    if (DEVICE.test(w.text)) return;
     if (w.glob) {
       const dir = resolvePath(globFolder(w.text), cwd);
       if (dir === null) { out.unknown.push({ word: w.text, program }); return; }
@@ -442,7 +447,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
   // Only words that look like paths count, so "npm test" or "make docs" don't
   // prompt just because a folder of that name exists.
   function named(w, cwd, program) {
-    if (w.dynamic || !w.text) return;
+    if (w.dynamic || !w.text || DEVICE.test(w.text)) return;
     let text = w.text;
     if (/^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
     if (!/[\\/]/.test(text) && !/^\.\.?$/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
