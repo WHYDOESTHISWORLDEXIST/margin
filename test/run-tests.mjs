@@ -1235,10 +1235,20 @@ test('citations: natbib, biblatex, multi-line and unicode forms are found; code,
   const md = citeCheck.findCitations(readText(path.join(fixtures, 'citations.md')), 'markdown').map((c) => `${c.key}@${c.line}:${c.form}`).join(' ');
   const expectedMd = 'smith2020:deep-learning@6:bracketed doe.2019@6:bracketed hale2018@6:bracketed web2021@7:bare müller2021@7:bracketed annwrites@8:bare ' +
     'hale2018@10:latex doe.2019@10:latex energy2017@10:latex tiny2019@10:latex last2022@11:latex UPPER2018@11:latex essays2019@11:latex mueller2021@11:latex ' +
-    'hale2018@12:latex doe.2019@12:latex web2021@12:latex paren2016@13:latex energy2017@14:latex';
+    'hale2018@12:latex doe.2019@12:latex web2021@12:latex paren2016@13:latex energy2017@14:latex ' +
+    'fig:plot@24:bracketed tbl:results@24:bare eq:one@24:bracketed sec:intro@24:bare lst:code@24:bare';
   assert(md === expectedMd, `\n       got      ${md}\n       expected ${expectedMd}`);
   const tex = citeCheck.findCitations(readText(path.join(fixtures, 'citations.tex')), 'tex').map((c) => `${c.key}@${c.line}`).join(' ');
-  assert(tex === 'hale2018@3 doe.2019@3 energy2017@5 tiny2019@9 last2022@9', tex);
+  assert(tex === 'hale2018@3 doe.2019@3 energy2017@5 tiny2019@9 last2022@9 hale2018@10 energy2017@10 tiny2019@10 last2022@10', tex); // B2-08: \Cite, \Citep, \Cites
+});
+
+test('pandoc-crossref labels are not reported as missing citations, unless the library has such a key (B2-08)', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'drafts', 'xref.md'), 'See [@fig:plot], @tbl:results and [@eq:one; @smith2020], also [@fig:real] and [@missing2020].\n');
+  fs.appendFileSync(path.join(dir, 'sources', 'library.bib'), '\n@misc{fig:real, title = {A key that looks like a label}, year = {2020}}\n');
+  const report = JSON.parse(run('cite-check.mjs', ['drafts/xref.md'], dir).out);
+  assert(report.unresolved.map((u) => u.key).join() === 'missing2020', JSON.stringify(report.unresolved.map((u) => u.key)));
+  assert(report.citations === 3 && report.resolved === 2, `${report.citations} citations, ${report.resolved} resolved`);
 });
 
 test('the library is the bibliography setting, else the newest .bib, with the others listed', () => {

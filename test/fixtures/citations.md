@@ -20,3 +20,5 @@ import x from '@scope/pkg'; // @decorator
 ```
 
 <!-- [@commented2020] is hidden -->
+
+Cross references, not citations: see [@fig:plot], @tbl:results, [@eq:one], @sec:intro and @lst:code.

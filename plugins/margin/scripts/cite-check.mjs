@@ -150,6 +150,11 @@ function blankRegions(text, kind) {
 
 const NOT_CITATIONS = new Set(['citestyle']);
 
+// pandoc-crossref labels (@fig:plot, [@tbl:results], @eq:one, @sec:intro, @lst:code) look
+// like citation keys but point at figures, tables and sections. They count as citations
+// only when the library really has such a key.
+export const isCrossReference = (key) => /^(?:fig|tbl|eq|sec|lst):/i.test(key);
+
 // [{ key, line, form: 'latex' | 'bracketed' | 'bare' }]
 export function findCitations(text, kind = 'markdown') {
   const src = blankRegions(stripBom(text).replace(/\r\n?/g, '\n'), kind);
@@ -165,9 +170,9 @@ export function findCitations(text, kind = 'markdown') {
 
   // LaTeX: \cite, \citep, \citeauthor, \parencite, \Textcite, \nocite, \cites{a}{b}, ...,
   // optional [..] and (..) arguments, keys over several lines.
-  for (const m of src.matchAll(/\\([A-Za-z]*cite[A-Za-z]*)\*?/g)) {
+  for (const m of src.matchAll(/\\([A-Za-z]*[cC]ite[A-Za-z]*)\*?/g)) {
     if (NOT_CITATIONS.has(m[1])) continue;
-    const multi = /cites$/.test(m[1]);
+    const multi = /[cC]ites$/.test(m[1]);
     let i = m.index + m[0].length;
     for (;;) {
       while (/\s/.test(src[i] || '')) i++;
@@ -287,7 +292,7 @@ function main() {
     console.log(`There is no draft named "${draftArg}" in this project.`);
     process.exit(1);
   }
-  const citations = findCitations(draftText, kind);
+  let citations = findCitations(draftText, kind);
 
   const report = { draft: rel(root, draftPath), library: null, libraryChosenBy: null };
   let bibPath = null;
@@ -308,6 +313,7 @@ function main() {
     library = parseBib(fs.readFileSync(bibPath, 'utf8'));
     if (!library.size) report.error = 'library_empty';
   }
+  citations = citations.filter((c) => c.form === 'latex' || library.has(c.key) || !isCrossReference(c.key));
   report.libraryEntries = library.size;
   report.citations = citations.length;
   report.distinctKeys = new Set(citations.map((c) => c.key)).size;
