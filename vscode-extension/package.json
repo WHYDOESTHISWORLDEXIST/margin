@@ -1,7 +1,7 @@
 {
   "name": "margin-companion",
   "displayName": "Margin Companion",
-  "description": "Shows Margin's notes in the editor margin only at natural pauses, and offers a quiet break when you've been stuck a while. Never pops up.",
+  "description": "Shows Margin's notes in the editor margin only at natural pauses, and quietly offers a break after a long quiet stretch. Never pops up.",
   "version": "0.1.0",
   "publisher": "margin-tools",
   "license": "MIT",
@@ -27,16 +27,16 @@
           "minimum": 2,
           "description": "Seconds without typing that count as a natural pause. Held notes appear at a pause."
         },
-        "margin.stuckMinutes": {
+        "margin.quietMinutes": {
           "type": "number",
           "default": 3,
           "minimum": 1,
-          "description": "Minutes of little progress (long idle, or mostly deleting) before the status bar quietly offers a break."
+          "description": "Minutes of quiet (no typing, or mostly deleting) before the status bar quietly offers a break."
         },
         "margin.suggestBreaks": {
           "type": "boolean",
           "default": true,
-          "description": "Quietly offer a break in the status bar when you seem to have stalled. It never pops up."
+          "description": "Quietly offer a break in the status bar after a long quiet stretch. It never pops up."
         },
         "margin.fileTypes": {
           "type": "array",

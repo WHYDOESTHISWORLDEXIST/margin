@@ -1,16 +1,16 @@
 ---
 name: pause
-description: Offer a short break when the writer feels stuck, with a choice of a very short story, a walk, something quiet, or a minute of noticing. Use only when the writer runs /margin:pause or asks for a break, a story, or help getting unstuck.
+description: Offer a short break, with a choice of a very short story, a walk, something quiet, or a minute of noticing. Use only when the writer runs /margin:pause or asks for a break or a story.
 argument-hint: "[story | walk | quiet | notice] [setting: ...] [symbol: ...] [flash | short | long]"
 disable-model-invocation: true
-allowed-tools: Bash(node *)
+allowed-tools: Bash(node *), PowerShell(node *)
 ---
 
 # A short break
 
 The writer typed: `$ARGUMENTS`
 
-Breaks work best when they're light and don't use words much, and when the writer chooses them. Never say "you seem stuck", never lecture about productivity, and keep everything short.
+Breaks work best when they're light and don't use words much, and when the writer chooses them. Never comment on how the writer is getting on, never lecture about productivity, and keep everything short.
 
 ## If they didn't pick
 
@@ -23,6 +23,10 @@ Offer four options with the AskUserQuestion tool:
 
 ## Story
 
+If they didn't type a length, first read the `storyLength` setting (it prints the settings and changes nothing):
+
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`
+
 Write one story following every rule below. Then stop: no title, no introduction, no explanation afterward.
 
 - Never name or imply one central problem. Let several small, unrelated things be slightly off at once, so the reader decides which one is theirs.
@@ -30,7 +34,7 @@ Write one story following every rule below. Then stop: no title, no introduction
 - End on a concrete action or image, before anything resolves.
 - If they gave a setting, the story happens there, but the setting must not hint at a way out.
 - If they gave a symbol, it appears at least twice, may change slightly, and is never explained or used as an answer.
-- Length: `flash` about 120 to 180 words with 2 threads; `short` about 300 to 450 words with 4 threads (the default, or the `storyLength` setting); `long` about 1,000 to 1,400 words with 6 threads.
+- Length: the one they typed, else the `storyLength` setting, else `short`. `flash` is about 120 to 180 words with 2 threads; `short` about 300 to 450 words with 4 threads; `long` about 1,000 to 1,400 words with 6 threads.
 - Vary the form between stories (plain prose, letters, dialogue only, a list, second person). Don't reuse images from earlier stories in this conversation.
 - Never base the story on the writer's draft or its problems.
 
@@ -38,7 +42,7 @@ After the story, add one quiet line, set apart: *Want to write a few lines? Pick
 
 ## Walk
 
-One or two sentences: five minutes is plenty, indoors is fine, no need to think about the draft. Their place is saved.
+One or two sentences: five minutes is plenty, indoors is fine, no need to think about the draft. Their draft will be right where they left it.
 
 ## Quiet
 

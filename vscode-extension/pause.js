@@ -5,13 +5,15 @@
 // progress: either no typing at all, or mostly deleting.
 
 class PauseTracker {
-  constructor({ pauseMs = 8000, stuckMs = 180000, now = () => Date.now() } = {}) {
+  constructor({ pauseMs = 8000, stuckMs = 180000, awayMs = 60000, now = () => Date.now() } = {}) {
     this.pauseMs = pauseMs;
     this.stuckMs = stuckMs;
+    this.awayMs = awayMs;
     this.now = now;
     this.lastEdit = now();
     this.events = []; // { t, inserted, deleted }
     this.forcedPause = false;
+    this.blurredAt = null;
   }
 
   recordEdit(inserted, deleted, endsParagraph = false) {
@@ -25,6 +27,20 @@ class PauseTracker {
 
   recordBlur() {
     this.forcedPause = true;
+    this.blurredAt = this.now();
+  }
+
+  // Back in the window. After more than awayMs away the writer starts a fresh
+  // clock: idle time and edits from before don't count, so nothing reads as a
+  // stall until they write again. Returns whether it counted as coming back.
+  recordFocus() {
+    const back = this.blurredAt !== null && this.now() - this.blurredAt >= this.awayMs;
+    this.blurredAt = null;
+    if (back) {
+      this.events = [];
+      this.lastEdit = this.now();
+    }
+    return back;
   }
 
   idleMs() {
@@ -52,10 +68,63 @@ class PauseTracker {
   }
 }
 
+// Whether the status bar shows the quiet break offer. It shows while it's
+// wanted (the writer seems stalled) and the window has focus. Once it has been
+// on screen for seenMs with the window focused, it counts as seen: from then
+// on, typing, leaving the window or the stall ending hides it, and after showMs
+// on screen in all it hides by itself. Each time a seen offer hides, or the
+// writer chooses from the break menu, it stays away for snoozeMs.
+class BreakOffer {
+  constructor({ seenMs = 30000, showMs = 120000, snoozeMs = 20 * 60000, now = () => Date.now() } = {}) {
+    this.seenMs = seenMs;
+    this.showMs = showMs;
+    this.snoozeMs = snoozeMs;
+    this.now = now;
+    this.visible = false;
+    this.shownMs = 0; // on screen, window focused, during this stall
+    this.lastUpdate = now();
+    this.snoozedUntil = 0;
+  }
+
+  // Call often (the companion does once a second). Returns whether to show it.
+  update(wanted, focused) {
+    const t = this.now();
+    if (this.visible) this.shownMs += t - this.lastUpdate;
+    this.lastUpdate = t;
+    if (this.visible && this.shownMs >= this.showMs) this.snooze();
+    const show = Boolean(wanted && focused) && t >= this.snoozedUntil;
+    if (!show && this.visible && this.shownMs >= this.seenMs) this.snooze();
+    if (!wanted) this.shownMs = 0; // the stall ended before the offer was seen: start afresh
+    this.visible = show;
+    return show;
+  }
+
+  seen() {
+    return this.visible && this.shownMs + (this.now() - this.lastUpdate) >= this.seenMs;
+  }
+
+  // The writer typed: a seen offer goes away. One not yet seen stays while the
+  // stall lasts (mostly deleting is typing too).
+  typed() {
+    if (this.seen()) this.snooze();
+  }
+
+  // The writer opened the break menu.
+  clicked() {
+    this.snooze();
+  }
+
+  snooze() {
+    this.snoozedUntil = this.now() + this.snoozeMs;
+    this.visible = false;
+    this.shownMs = 0;
+  }
+}
+
 // True when an edit just finished a paragraph: a newline typed right after
 // sentence-ending punctuation.
 function endsParagraph(previousLineText, insertedText) {
   return /\n/.test(insertedText) && /[.!?"”')\]]\s*$/.test(previousLineText);
 }
 
-module.exports = { PauseTracker, endsParagraph };
+module.exports = { PauseTracker, BreakOffer, endsParagraph };

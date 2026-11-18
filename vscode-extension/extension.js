@@ -6,7 +6,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { PauseTracker, endsParagraph } = require('./pause');
+const { PauseTracker, BreakOffer, endsParagraph } = require('./pause');
 
 const KIND_STYLE = {
   citation: { icon: 'dot-citation.svg', ruler: '#2F6A8A', label: 'Citation' },
@@ -15,18 +15,37 @@ const KIND_STYLE = {
   todo: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Loose end' },
   note: { icon: 'dot-related.svg', ruler: '#8A93A0', label: 'Note' }
 };
-const BREAK_SNOOZE_MS = 20 * 60 * 1000;
+const RETURN_SPOT_MS = 30 * 60 * 1000;
+// Windows and macOS drives usually ignore case: "Drafts/Ch3.md" is drafts/ch3.md.
+const IGNORE_CASE = process.platform === 'win32' || process.platform === 'darwin';
+const fileKey = (file) => (IGNORE_CASE ? String(file).toLowerCase() : String(file));
+const kindOf = (n) => (Object.prototype.hasOwnProperty.call(KIND_STYLE, n.kind) ? n.kind : 'note');
 
 function activate(context) {
   const config = () => vscode.workspace.getConfiguration('margin');
+  // A setting that is missing or not a positive number falls back to its default.
+  const positive = (key, fallback) => { const v = Number(config().get(key)); return Number.isFinite(v) && v > 0 ? v : fallback; };
+  // margin.quietMinutes used to be called margin.stuckMinutes. Someone who only set the old
+  // key keeps their value: it is used when the new key has no value of its own.
+  const hasOwnValue = (key) => {
+    const i = typeof config().inspect === 'function' ? config().inspect(key) : null;
+    return Boolean(i) && [i.globalValue, i.workspaceValue, i.workspaceFolderValue].some((v) => v !== undefined);
+  };
+  const quietMinutes = () => {
+    if (!hasOwnValue('quietMinutes')) {
+      const old = Number(config().get('stuckMinutes'));
+      if (Number.isFinite(old) && old > 0) return old;
+    }
+    return positive('quietMinutes', 3);
+  };
   const tracker = new PauseTracker({
-    pauseMs: config().get('pauseSeconds') * 1000,
-    stuckMs: config().get('stuckMinutes') * 60 * 1000
+    pauseMs: positive('pauseSeconds', 8) * 1000,
+    stuckMs: quietMinutes() * 60 * 1000
   });
+  const offer = new BreakOffer();
   const revealed = new Set();
   let notes = [];
   let windowFocused = vscode.window.state.focused;
-  let snoozedUntil = 0;
   let walkReturn = null;
 
   const decorations = {};
@@ -46,9 +65,12 @@ function activate(context) {
   context.subscriptions.push(returnHighlight);
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  status.command = 'margin.notes';
   status.show();
   context.subscriptions.push(status);
+  // What the status item and each editor last showed. Nothing is re-sent while
+  // it stays the same, and VS Code keeps dots in place as the writer edits.
+  const statusShown = {};
+  const painted = new WeakMap(); // editor -> Map(kind -> signature)
 
   function root() {
     const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
@@ -60,6 +82,9 @@ function activate(context) {
     return r ? path.join(r, '.margin', 'suggestions.json') : null;
   }
 
+  // Notes whose file exists (checked each time the notes are loaded); only
+  // these can show as a dot, so only these are counted.
+  let present = new Set();
   function loadNotes() {
     const file = notesFile();
     try {
@@ -68,23 +93,58 @@ function activate(context) {
     } catch {
       notes = [];
     }
+    const r = root();
+    present = new Set(notes.filter((n) => r && typeof n.file === 'string' && fs.existsSync(path.join(r, n.file))).map((n) => n.id));
     refresh();
   }
 
-  function saveStatus(id, statusValue) {
-    const file = notesFile();
+  // Breaks are offered only if both the VS Code setting and the project's own
+  // answer from /margin:setup (suggestBreaks in .margin/settings.json) allow
+  // them. A file that can't be read just now keeps the last answer.
+  let projectAllowsBreaks = true;
+  function loadProjectSettings() {
+    const r = root();
+    if (!r) return;
     try {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const item = (data.items || []).find((n) => n.id === id);
-      if (item) item.status = statusValue;
-      fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
-    } catch {
-      // Nothing to update.
+      const data = JSON.parse(fs.readFileSync(path.join(r, '.margin', 'settings.json'), 'utf8').replace(/^\uFEFF/, ''));
+      projectAllowsBreaks = !(data && data.suggestBreaks === false);
+    } catch (e) {
+      if (e.code === 'ENOENT') projectAllowsBreaks = true;
     }
   }
 
+  // Dismissing a note changes one note's status in a file that Claude's scripts
+  // also write. The file is read again right before, and replaced in one step
+  // (temp file, then rename), so a reader never sees half a file and a note Claude
+  // queued a moment ago is not lost. A file that can't be understood is left alone.
+  function saveStatus(id, statusValue) {
+    const file = notesFile();
+    if (!file) return false;
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+      if (!data || !Array.isArray(data.items)) return false;
+      const item = data.items.find((n) => n && n.id === id);
+      if (!item || item.status === statusValue) return false;
+      item.status = statusValue;
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
+      for (let attempt = 0; ; attempt++) {
+        try { fs.renameSync(tmp, file); break; } catch (err) {
+          // Windows can refuse a rename for a moment while another program has the file open.
+          if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
+        }
+      }
+      return true;
+    } catch {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
+      return false;
+    }
+  }
+
+  // The writer's own documents; output panels and other views change too.
   function watched(doc) {
-    return config().get('fileTypes').includes(doc.languageId);
+    return (doc.uri.scheme === 'file' || doc.uri.scheme === 'untitled') && config().get('fileTypes').includes(doc.languageId);
   }
 
   function relPath(doc) {
@@ -92,36 +152,57 @@ function activate(context) {
     return r ? path.relative(r, doc.uri.fsPath).split(path.sep).join('/') : null;
   }
 
+  // Sends an editor's dots only for the kinds whose notes changed since it last
+  // showed them. A newly shown editor starts with none, so it gets all of its own.
   function paint() {
     for (const editor of vscode.window.visibleTextEditors) {
       const rel = relPath(editor.document);
+      const key = rel === null ? null : fileKey(rel);
+      const lastLine = editor.document.lineCount - 1;
       const byKind = {};
       for (const kind of Object.keys(KIND_STYLE)) byKind[kind] = [];
       for (const n of notes) {
-        if (n.file !== rel || !revealed.has(n.id)) continue;
-        const line = Math.min(Math.max((n.line || 1) - 1, 0), editor.document.lineCount - 1);
-        const style = KIND_STYLE[n.kind] || KIND_STYLE.note;
-        const hover = new vscode.MarkdownString(`**${style.label}**\n\n${n.message}${n.source ? `\n\n_See ${n.source}_` : ''}`);
-        (byKind[n.kind] || byKind.note).push({ range: new vscode.Range(line, 0, line, 0), hoverMessage: hover });
+        if (!revealed.has(n.id) || key === null || fileKey(n.file) !== key) continue;
+        byKind[kindOf(n)].push({ n, line: Math.min(Math.max((n.line || 1) - 1, 0), lastLine) });
       }
-      for (const [kind, list] of Object.entries(byKind)) editor.setDecorations(decorations[kind], list);
+      let last = painted.get(editor);
+      if (!last) painted.set(editor, (last = new Map()));
+      for (const [kind, list] of Object.entries(byKind)) {
+        const signature = JSON.stringify(list.map(({ n, line }) => [n.id, line, n.message, n.source]));
+        if ((last.get(kind) || '[]') === signature) continue;
+        last.set(kind, signature);
+        editor.setDecorations(decorations[kind], list.map(({ n, line }) => ({
+          range: new vscode.Range(line, 0, line, 0),
+          hoverMessage: new vscode.MarkdownString(`**${KIND_STYLE[kind].label}**\n\n${n.message}${n.source ? `\n\n_See ${n.source}_` : ''}`)
+        })));
+      }
+    }
+  }
+
+  function setStatus(next) {
+    for (const key of ['text', 'tooltip', 'command']) {
+      if (statusShown[key] !== next[key]) status[key] = statusShown[key] = next[key];
     }
   }
 
   function refresh() {
-    const shown = notes.filter((n) => revealed.has(n.id)).length;
-    const held = notes.length - shown;
-    const offerBreak =
-      config().get('suggestBreaks') && windowFocused && Date.now() > snoozedUntil && tracker.isStalled() &&
-      vscode.window.activeTextEditor && watched(vscode.window.activeTextEditor.document);
-    if (offerBreak) {
-      status.text = '$(coffee) Margin · break?';
-      status.tooltip = 'A short break is here if you want one. Click to choose, or just ignore this.';
-      status.command = 'margin.breakMenu';
+    const live = notes.filter((n) => present.has(n.id));
+    const shown = live.filter((n) => revealed.has(n.id)).length;
+    const held = live.length - shown;
+    const editor = vscode.window.activeTextEditor;
+    const stalled = Boolean(config().get('suggestBreaks') && projectAllowsBreaks && editor && watched(editor.document) && tracker.isStalled());
+    if (offer.update(stalled, windowFocused)) {
+      setStatus({
+        text: '$(coffee) Margin · break?',
+        tooltip: 'A short break is here if you want one. Click to choose, or just ignore this.',
+        command: 'margin.breakMenu'
+      });
     } else {
-      status.text = shown ? `$(circle-small-filled) Margin · ${shown}` : '$(circle-small) Margin';
-      status.tooltip = `${shown} margin note${shown === 1 ? '' : 's'}${held ? ` · ${held} held until your next pause` : ''}`;
-      status.command = 'margin.notes';
+      setStatus({
+        text: shown ? `$(circle-small-filled) Margin · ${shown}` : '$(circle-small) Margin',
+        tooltip: `${shown} margin note${shown === 1 ? '' : 's'}${held ? ` · ${held} held until your next pause` : ''}`,
+        command: 'margin.notes'
+      });
     }
     paint();
   }
@@ -145,41 +226,65 @@ function activate(context) {
       if (endsParagraph(prevLine, change.text)) finished = true;
     }
     tracker.recordEdit(inserted, deleted, finished);
+    offer.typed();
+    walkReturn = null; // the writer is back at it
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
+    if (state.focused === windowFocused) return; // some VS Code versions also report activity changes
     windowFocused = state.focused;
-    if (!state.focused) tracker.recordBlur();
-    if (state.focused && walkReturn) showReturnSpot();
+    if (!state.focused) {
+      tracker.recordBlur();
+      if (walkReturn) walkReturn.left = true;
+    } else {
+      tracker.recordFocus();
+      if (walkReturn && walkReturn.walk && walkReturn.left) showReturnSpot();
+    }
   }));
 
-  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(paint));
+  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => paint()));
 
-  // Notes file.
+  // A change to a margin.* setting takes effect at once, without reloading the window.
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (!e.affectsConfiguration('margin')) return;
+    tracker.pauseMs = positive('pauseSeconds', 8) * 1000;
+    tracker.stuckMs = quietMinutes() * 60 * 1000;
+    refresh();
+  }));
+
+  // Margin's files: the notes queue, and the project's settings.
   const r = root();
-  if (r) {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(r, '.margin/suggestions.json'));
-    watcher.onDidChange(loadNotes);
-    watcher.onDidCreate(loadNotes);
-    watcher.onDidDelete(loadNotes);
+  function watch(name, onChange) {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(r, `.margin/${name}`));
+    watcher.onDidChange(onChange);
+    watcher.onDidCreate(onChange);
+    watcher.onDidDelete(onChange);
     context.subscriptions.push(watcher);
   }
+  if (r) {
+    watch('suggestions.json', loadNotes);
+    watch('settings.json', loadProjectSettings);
+  }
 
+  // Cheap checks once a second; refresh() only touches the UI when something changed.
   const timer = setInterval(() => {
     if (tracker.isPaused()) revealHeld();
     refresh();
   }, 1000);
   context.subscriptions.push({ dispose: () => clearInterval(timer) });
 
-  // Break flow.
-  function rememberSpot() {
+  // Break flow. The writer's place when they chose a break is highlighted when
+  // they come back: from a walk, when the window has focus again; from a quiet
+  // panel, when they close it. It's forgotten once they edit, and after half an hour.
+  function rememberSpot(walk) {
     const editor = vscode.window.activeTextEditor;
-    if (editor) walkReturn = { uri: editor.document.uri, line: editor.selection.active.line };
+    walkReturn = editor ? { uri: editor.document.uri, line: editor.selection.active.line, at: Date.now(), walk, left: false } : null;
   }
 
   async function showReturnSpot() {
     const spot = walkReturn;
     walkReturn = null;
+    if (!spot || Date.now() - spot.at > RETURN_SPOT_MS) return;
     const doc = await vscode.workspace.openTextDocument(spot.uri);
     const editor = await vscode.window.showTextDocument(doc);
     const range = new vscode.Range(spot.line, 0, spot.line, 0);
@@ -189,7 +294,7 @@ function activate(context) {
   }
 
   context.subscriptions.push(vscode.commands.registerCommand('margin.breakMenu', async () => {
-    snoozedUntil = Date.now() + BREAK_SNOOZE_MS;
+    offer.clicked();
     refresh();
     const choice = await vscode.window.showQuickPick([
       { label: '$(book) A very short story', description: 'about a minute', id: 'story' },
@@ -203,10 +308,10 @@ function activate(context) {
       await vscode.env.clipboard.writeText('/margin:pause story');
       vscode.window.setStatusBarMessage('Copied "/margin:pause story". Paste it into Claude Code.', 6000);
     } else if (choice.id === 'walk') {
-      rememberSpot();
+      rememberSpot(true);
       vscode.window.setStatusBarMessage('Enjoy the walk. Your place is saved.', 8000);
     } else {
-      rememberSpot();
+      rememberSpot(false);
       openQuiet(choice.id);
     }
   }));
@@ -217,7 +322,7 @@ function activate(context) {
     const panel = vscode.window.createWebviewPanel('marginQuiet', mode === 'notice' ? 'Just notice' : 'Something quiet',
       vscode.ViewColumn.Beside, { enableScripts: true });
     panel.webview.html = quietHtml(mode);
-    panel.onDidDispose(() => { if (walkReturn) showReturnSpot(); });
+    panel.onDidDispose(() => { if (walkReturn && !walkReturn.walk) showReturnSpot(); });
   }
 
   // Notes list.
@@ -228,7 +333,7 @@ function activate(context) {
       return;
     }
     const pick = await vscode.window.showQuickPick(notes.map((n) => ({
-      label: `${(KIND_STYLE[n.kind] || KIND_STYLE.note).label}: ${n.file}:${n.line}`,
+      label: `${KIND_STYLE[kindOf(n)].label}: ${n.file}:${n.line}`,
       detail: n.message,
       note: n
     })), { placeHolder: 'Margin notes' });
@@ -248,6 +353,7 @@ function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand('margin.showNow', revealHeld));
 
+  loadProjectSettings();
   loadNotes();
 }
 

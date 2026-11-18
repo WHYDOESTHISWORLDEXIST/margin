@@ -2,20 +2,22 @@
 name: check
 description: Quietly check a draft against the writer's earlier notes for contradictions, missing citations and loose ends, and leave margin notes instead of editing. Use when the writer runs /margin:check or asks whether a draft contradicts their notes, is missing sources, or has inconsistencies.
 argument-hint: "[draft file]"
-allowed-tools: Bash(node *), Read, Grep, Glob
+allowed-tools: Bash(node *), PowerShell(node *), Read, Grep, Glob
 ---
 
 # Check a draft
 
-Draft to check: `$ARGUMENTS` (if empty, use the most recently changed file in the drafts folder from `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" show`, and say which one you picked).
+Draft to check: `$ARGUMENTS` (if empty, use the most recently changed file in the drafts folder from `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" show`, and say which one you picked).
 
 You are a careful second reader, not an editor. **Never change the draft.** Every finding becomes a margin note that the writer can act on or dismiss.
+
+Before anything else, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" --project "${CLAUDE_PROJECT_DIR}" ensure`. It prints nothing unless it had to set Margin up in this project.
 
 ## 1. Gather
 
 - Read the draft.
 - Read the writer's earlier notes from the notes folder. If focus is on, use only what focus allows; don't try to get around the guard.
-- Run the citation check: `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" <draft>`
+- Run the citation check: `node "${CLAUDE_PLUGIN_ROOT}/scripts/cite-check.mjs" --project "${CLAUDE_PROJECT_DIR}" "<draft>"`. If it says there is no draft by that name, tell the writer in one line and stop. If it reports an `error` (`no_library`, `library_missing`, `library_empty`), skip citation-key findings and say in one line that the library couldn't be used. An unresolved key with `form: "bare"` (an @name in running text) may be a mention rather than a citation; only note it if the context shows it's a citation.
 
 ## 2. Look for
 
@@ -30,11 +32,13 @@ Be conservative. A false alarm costs the writer more than a missed one, so only 
 
 ## 3. Leave notes
 
-Queue every finding at once, with the draft's line number:
+Queue every finding at once, with the draft's line number. Each note starts with `--file`; repeat the flags in the same command for more notes:
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" add '[{"file":"drafts/ch3.md","line":12,"kind":"contradiction","message":"Says 1871 here; notes/interviews.md:40 says 1874.","source":"notes/interviews.md:40"}]'`
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/suggestions.mjs" --project "${CLAUDE_PROJECT_DIR}" add --file "drafts/ch3.md" --line 12 --kind contradiction --message "Says 1871 here; notes/interviews.md:40 says 1874." --source "notes/interviews.md:40"`
 
-Keep each message under about 25 words and factual. No praise, no "consider rewriting".
+Put each value in straight double quotes. Inside a message, quote with ‘single curly quotes’ and write apostrophes as ’; never use double quotes of any kind (" “ ”), `$` or backticks, so the command works the same in every shell. Keep each message under about 25 words and factual. No praise, no ‘consider rewriting’.
+
+Running the check again is safe: a note that is already queued, or that the writer dismissed, is not added again, even if you word it differently (same file, kind, line and `--source`), so always give `--source` when a note points at another place. The same finding at several places is kept for each place. The command says how many were new ("3 new, 2 already queued or dismissed"); report only the new ones.
 
 ## 4. Report
 
