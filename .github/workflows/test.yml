@@ -1,0 +1,44 @@
+# Runs the plugin's tests on macOS, Linux and Windows for every pull request and
+# every push to main. macOS runs once, on current Node: on a private repository its
+# minutes count ten times. Node 18 (the oldest the plugin supports) is checked on Linux.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, node: 24 }
+          - { os: ubuntu-latest, node: 18 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: windows-latest, node: 24 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      # bash on every runner (Git Bash on Windows), so the tests that run hooks.json
+      # through `sh -c` run there too instead of being skipped.
+      - name: Syntax check
+        shell: bash
+        run: git ls-files -z '*.js' '*.mjs' '*.cjs' | xargs -0 -n1 node --check
+      - name: Tests
+        shell: bash
+        run: node test/run-tests.mjs

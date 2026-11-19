@@ -265,7 +265,8 @@ export function onDiskSpelling(root, relPath) {
     if (part !== '.' && part !== '..') {
       let names = [];
       try { names = fs.readdirSync(dir); } catch { /* not a folder */ }
-      if (!names.includes(part)) name = names.find((n) => n.toLowerCase() === part.toLowerCase()) || part;
+      // Only where the drive ignores case: elsewhere "DRAFTS" and "drafts" are different names.
+      if (!names.includes(part) && caseInsensitive) name = names.find((n) => n.toLowerCase() === part.toLowerCase()) || part;
     }
     out.push(name);
     dir = path.join(dir, name);

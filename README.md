@@ -118,6 +118,8 @@ node test/run-tests.mjs
 
 The tests run each hook command from `hooks.json` through `sh -c`, in a copy of the plugin and a project whose paths contain spaces. That needs a Bash-compatible `sh` on the PATH (Git Bash on Windows); without one, those three tests are skipped with a message.
 
+GitHub Actions runs the same tests on macOS, Linux and Windows for every pull request and every push to `main` (`.github/workflows/test.yml`), with Node 18 on Linux and current Node everywhere.
+
 Claude Code updates an installed plugin only when the `version` in `plugins/margin/.claude-plugin/plugin.json` changes, so raise it with every change people should receive. Otherwise `claude plugin update` reports the plugin as already up to date and keeps the old code.
 
 To load the plugin from this folder without installing it, start Claude Code with:
