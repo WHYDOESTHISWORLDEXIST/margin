@@ -1106,7 +1106,13 @@ const SHELL_TABLE = [
   ['bash', 'tar czf - sources | tar xzOf -', 'ask'], ['bash', 'tar czf - drafts | tar xzOf -', 'allow'], ['bash', 'tar -C sources -cf - . | tar -xOf -', 'ask'],
   ['bash', 'ditto -c -k sources - | funzip', 'ask'], ['bash', 'zip -qr - sources | funzip', 'ask'], ['bash', 'git show HEAD -- sources', 'ask'],
   ['bash', 'git log -p -- sources', 'ask'], ['bash', 'git show HEAD -- drafts', 'allow'], ['bash', 'make sources', 'allow'], ['bash', 'npm run sources', 'allow'],
-  ['powershell', 'Compress-Archive -Path sources -DestinationPath out.zip', 'ask'], ['powershell', 'tar -cf - sources', 'ask']
+  ['powershell', 'Compress-Archive -Path sources -DestinationPath out.zip', 'ask'], ['powershell', 'tar -cf - sources', 'ask'],
+  // T3: git grep is a search of its paths, else of the folder it runs in.
+  ['bash', 'git grep mills', 'deny'], ['bash', 'git grep mills HEAD', 'deny'], ['bash', 'git grep -n mills -- sources', 'deny'],
+  ['bash', 'git grep mills -- drafts', 'allow'], ['bash', 'git grep mills drafts', 'allow'], ['bash', 'git grep -e mills -e Hale -- drafts', 'allow'],
+  ['bash', 'git grep mills -- "*.md"', 'deny'], ['bash', 'git -C drafts grep mills', 'allow'], ['bash', 'git -C sources grep mills', 'deny'],
+  ['bash', 'cd drafts && git grep mills', 'allow'], ['bash', 'git grep -f notes/private.md drafts', 'deny'], ['bash', 'git grep mills -- :/', 'ask'],
+  ['bash', 'git -C $DIR grep mills', 'ask'], ['bash', 'git --no-pager grep -C 2 mills drafts', 'allow'], ['powershell', 'git grep mills', 'deny']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

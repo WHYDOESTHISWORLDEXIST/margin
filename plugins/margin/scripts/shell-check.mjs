@@ -74,17 +74,8 @@ const QUIET = new Set([
 // still ask when they name a file outside the list.
 const QUIET_GIT = new Set(['add', 'rm', 'mv', 'commit', 'restore', 'checkout', 'switch', 'reset', 'status', 'push', 'pull', 'fetch', 'tag', 'branch', 'init', 'clone', 'merge', 'rebase', 'clean']);
 const GIT_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
-
-function gitSubcommand(args) {
-  for (let k = 0; k < args.length; k++) {
-    const t = args[k].text;
-    if (args[k].dynamic) return null;
-    if (GIT_OPTIONS_WITH_VALUE.has(t)) { k++; continue; }
-    if (t.startsWith('-')) continue;
-    return t;
-  }
-  return null;
-}
+// git grep options whose value is the next word (-f, the pattern file, is read).
+const GIT_GREP_VALUES = new Set(['-A', '-B', '-C', '-m', '--max-count', '--max-depth', '--threads', '--context', '--after-context', '--before-context']);
 
 const CD = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
 const PUSH = new Set(['pushd', 'push-location']);
@@ -575,7 +566,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     }
     if (LISTERS.has(prog) || (QUIET.has(prog) && !(ps && PS_READERS.has(prog)))) return undefined;
 
-    if (prog === 'git' && QUIET_GIT.has(gitSubcommand(args))) return undefined;
+    if (prog === 'git') { gitCommand(args, cwd); return undefined; }
 
     const readers = ps ? PS_READERS : POSIX_READERS;
     if (!readers.has(prog)) { otherProgram(prog, args, cwd); return undefined; }
@@ -648,6 +639,65 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (prog === 'cp' && !has('-t', '--target-directory')) files = operands.slice(0, -1);
     for (const w of files) readTarget(w, cwd, prog, false);
     return undefined;
+  }
+
+  // git: subcommands that print no file contents pass. `git grep` is a search of
+  // its paths, else of the folder it runs in (-C moves it). The rest ask when they
+  // name a file outside the list, as other programs do.
+  function gitCommand(args, cwd) {
+    let here = cwd;
+    let k = 0;
+    for (; k < args.length; k++) {
+      const w = args[k];
+      if (w.dynamic) { otherProgram('git', args, cwd); return; }   // can't tell which subcommand
+      if (w.text === '-C' && args[k + 1]) { here = args[k + 1].dynamic ? null : resolvePath(args[k + 1].text, here); k++; continue; }
+      if (GIT_OPTIONS_WITH_VALUE.has(w.text)) { k++; continue; }
+      if (w.text.startsWith('-')) continue;
+      break;
+    }
+    const sub = args[k] ? args[k].text : null;
+    if (!sub || QUIET_GIT.has(sub)) return;
+    if (here === null) { out.unknown.push({ word: 'a folder only known when it runs (-C)', program: `git ${sub}` }); return; }
+    // git matches wildcards in pathspecs itself, so a quoted "*.md" after `--` is one too.
+    let dashes = false;
+    const rest = args.slice(k + 1).map((w) => {
+      if (!dashes) { if (w.text === '--' && !w.dynamic) dashes = true; return w; }
+      return /[*?[]/.test(w.text) ? { ...w, glob: true } : w;
+    });
+    if (sub === 'grep') { gitGrep(rest, here); return; }
+    otherProgram(`git ${sub}`, rest, here);
+  }
+
+  function gitGrep(args, here) {
+    let patternGiven = false;
+    const operands = [];
+    const roots = [];
+    let afterDashes = false;
+    for (let j = 0; j < args.length; j++) {
+      const w = args[j];
+      if (afterDashes) { roots.push(w); continue; }
+      if (w.text === '--' && !w.dynamic) { afterDashes = true; continue; }
+      if (!w.dynamic && w.text.length > 1 && w.text.startsWith('-')) {
+        if (w.text === '-e') { patternGiven = true; j++; continue; }
+        if (w.text === '-f') { patternGiven = true; if (args[j + 1]) readTarget(args[j + 1], here, 'git grep -f', false); j++; continue; }
+        if (GIT_GREP_VALUES.has(w.text)) j++;
+        continue;
+      }
+      operands.push(w);
+    }
+    // Before `--`, a word that names an existing path is a path; anything else is a
+    // revision (git grep x HEAD searches the files as they are at HEAD, from here down).
+    for (const w of patternGiven ? operands : operands.slice(1)) {
+      if (w.dynamic) { roots.push(w); continue; }
+      if (/[*?[]/.test(w.text)) { roots.push({ ...w, glob: true }); continue; }   // a wildcard is a pathspec, not a revision
+      const p = resolvePath(w.text, here);
+      if (p !== null && statOf(p)) roots.push(w);
+    }
+    if (!roots.length) roots.push({ text: '.', dynamic: false, glob: false });
+    for (const r of roots) {
+      if (!r.dynamic && r.text.startsWith(':')) { out.unknown.push({ word: r.text, program: 'git grep' }); continue; } // :/ and other pathspec magic
+      readTarget(r, here, 'git grep', true);
+    }
   }
 
   // A program Margin doesn't know: an existing path it names outside the list asks.
