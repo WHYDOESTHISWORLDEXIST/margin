@@ -1119,7 +1119,19 @@ const SHELL_TABLE = [
   ['bash', 'git show HEAD:notes/gone.md', 'ask'], ['bash', 'git show HEAD:drafts/gone.md', 'allow'], ['bash', 'git show HEAD:sources', 'allow'],
   ['bash', 'git show HEAD:', 'allow'], ['bash', 'cd drafts && git show HEAD:./ch3.md', 'allow'], ['bash', 'cd drafts && git show HEAD:../notes/private.md', 'deny'],
   ['bash', 'git diff HEAD:drafts/ch3.md HEAD:notes/private.md', 'deny'], ['bash', 'git log --format=%H:%s -- drafts', 'allow'],
-  ['bash', 'git remote add origin git@github.com:a/b.git', 'allow'], ['powershell', 'git show HEAD:notes/private.md', 'deny']
+  ['bash', 'git remote add origin git@github.com:a/b.git', 'allow'], ['powershell', 'git show HEAD:notes/private.md', 'deny'],
+  // T6: a name made earlier in the line (ln, mv, cp) is read as the real file; moving a file from outside the
+  // list into it asks; a recursive copy of an outside folder reads it. A link alone is fine: later reads through
+  // it are judged by where it points.
+  ['bash', 'ln -s ../notes drafts/x; cat drafts/x/private.md', 'deny'], ['bash', 'ln -s ../sources drafts/s', 'allow'],
+  ['bash', 'ln -s ../notes/private.md drafts/p.md && cat drafts/p.md', 'deny'], ['bash', 'ln -s ch3.md drafts/ch3-link.md && cat drafts/ch3-link.md', 'allow'],
+  ['bash', 'cd drafts && ln -s ../sources && cat sources/library.bib', 'deny'], ['bash', 'mv notes/private.md drafts/', 'ask'],
+  ['bash', 'mv notes/private.md drafts/; cat drafts/private.md', 'deny'], ['bash', 'mv -t drafts notes/private.md', 'ask'], ['bash', 'mv sources archive', 'allow'],
+  ['bash', 'mv notes/private.md archive/ && cat archive/private.md', 'deny'], ['bash', 'mv drafts/ch3.md drafts/chapter-3.md', 'allow'],
+  ['bash', 'cp -r sources drafts/', 'deny'], ['bash', 'cp -a sources drafts/backup', 'deny'], ['bash', 'cp -r drafts drafts-backup', 'allow'], ['bash', 'cp sources drafts/', 'allow'],
+  ['powershell', 'Move-Item notes\\private.md drafts\\', 'ask'], ['powershell', 'Move-Item notes\\private.md archive\\', 'allow'],
+  ['powershell', 'New-Item -ItemType SymbolicLink -Path drafts\\s -Target sources; Get-Content drafts\\s\\library.bib', 'deny'],
+  ['powershell', 'Copy-Item -Recurse sources drafts\\', 'deny'], ['powershell', 'New-Item -ItemType Directory drafts\\new', 'allow']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

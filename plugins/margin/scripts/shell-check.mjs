@@ -6,6 +6,7 @@
 //   searches  folders a recursive search (grep -r, rg, find -exec, ...) would cover
 //   named     existing paths that an interpreter one-liner or an unknown program names
 //   unknown   reader operands that can't be worked out ($VAR, $(...), names from a pipe)
+//   moves     files mv moves: { from, to } (into the list, they ask)
 // Listing names (ls, find, Get-ChildItem), echo/printf text and Margin's own
 // scripts read nothing. Each entry is { path | dir | word, program }.
 import fs from 'node:fs';
@@ -57,7 +58,7 @@ const LISTERS = new Set(['ls', 'dir', 'vdir', 'tree', 'find', 'gfind', 'fd', 'fd
 // Programs that don't show file contents to Claude.
 const QUIET = new Set([
   'echo', 'printf', 'true', 'false', 'test', '[', '[[', ':', 'pwd', 'stat', 'du', 'df', 'file', 'which', 'whereis',
-  'realpath', 'readlink', 'basename', 'dirname', 'mkdir', 'rmdir', 'touch', 'rm', 'mv', 'ln', 'chmod', 'chown', 'chgrp',
+  'realpath', 'readlink', 'basename', 'dirname', 'mkdir', 'rmdir', 'touch', 'rm', 'chmod', 'chown', 'chgrp',
   'open', 'xdg-open', 'start', 'code', 'explorer', 'sleep', 'date', 'clear', 'export', 'unset', 'alias', 'read', 'wait',
   'kill', 'ps', 'whoami', 'hostname', 'uname', 'history', 'exit', 'return', 'set', 'shopt', 'tee', 'tr', 'seq',
   'locate', 'trap', 'local', 'declare', 'readonly', 'type' /* bash builtin; PowerShell's type is a reader */,
@@ -406,12 +407,24 @@ function globFolder(text) {
 }
 
 export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = null, root = null } = {}) {
-  const out = { reads: [], searches: [], named: [], unknown: [] };
+  const out = { reads: [], searches: [], named: [], unknown: [], moves: [] };
   const scriptsReal = scriptsDir ? safeReal(scriptsDir) : null;
+  // Names that mv, cp or ln give things earlier in this command line: a later read
+  // through the new name is judged by where the file really is, since the check
+  // runs before any of it exists (ln -s ../notes drafts/x; cat drafts/x/a.md).
+  const aliases = [];
   run(command, dialect, cwd, 0);
   return out;
 
   function safeReal(p) { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } }
+  function viaAlias(p) {
+    const key = (s) => (IS_WINDOWS || process.platform === 'darwin' ? s.toLowerCase() : s);
+    for (let i = aliases.length - 1; i >= 0; i--) {
+      const { at, to } = aliases[i];
+      if (key(p) === key(at) || key(p).startsWith(key(at) + path.sep)) return to + p.slice(at.length);
+    }
+    return p;
+  }
 
   // Runs a command line, following its current folder: `cd`, `pushd`/`popd` (null
   // when it can't be known), and subshells, after which the folder is as before.
@@ -456,13 +469,15 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (w.dynamic) { out.unknown.push({ word: w.text || '(a variable)', program }); return; }
     if (DEVICE.test(w.text)) return;
     if (w.glob) {
-      const dir = resolvePath(globFolder(w.text), cwd);
-      if (dir === null) { out.unknown.push({ word: w.text, program }); return; }
+      const found = resolvePath(globFolder(w.text), cwd);
+      if (found === null) { out.unknown.push({ word: w.text, program }); return; }
+      const dir = viaAlias(found);
       if (statOf(dir)) out.searches.push({ dir, program });
       return;
     }
-    const p = resolvePath(w.text, cwd);
-    if (p === null) { out.unknown.push({ word: w.text, program }); return; }
+    const found = resolvePath(w.text, cwd);
+    if (found === null) { out.unknown.push({ word: w.text, program }); return; }
+    const p = viaAlias(found);
     const st = statOf(p);
     if (!st) return;
     if (st.isDirectory()) { if (recursive) out.searches.push({ dir: p, program }); return; }
@@ -480,7 +495,8 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (!operand && /^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
     if (/^\.\.?$/.test(text)) return; // a bare "." or ".." is the current folder: "git add .", "pip install ."
     if (!bare && !/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
-    const p = resolvePath(w.glob ? globFolder(text) : text, cwd);
+    const found = resolvePath(w.glob ? globFolder(text) : text, cwd);
+    const p = found === null ? null : viaAlias(found);
     if (p !== null && statOf(p)) out.named.push({ path: p, program });
   }
 
@@ -576,6 +592,30 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       if (at >= 0) for (const r of fdRoots(args.slice(0, at))) readTarget(r, cwd, `${prog} -x`, true);
       return undefined;
     }
+    // Moving or linking gives a file a new name: reads through it later in the line
+    // are judged by the real file, and a move from outside the list into it asks.
+    if (!ps && (prog === 'mv' || prog === 'ln')) { moveOrLink(prog, args, cwd); return undefined; }
+    if (ps && (prog === 'move-item' || prog === 'mi' || prog === 'move')) {
+      const a = psArgs(args);
+      const sources = [...(a.named['-path'] || []), ...(a.named['-literalpath'] || [])];
+      const rest = [...a.positional];
+      if (!sources.length && rest.length) sources.push(rest.shift());
+      const dest = (a.named['-destination'] || [])[0] || rest[0];
+      if (dest) relocate('mv', sources, dest, cwd);
+      return undefined;
+    }
+    if (ps && (prog === 'new-item' || prog === 'ni')) {
+      const a = psArgs(args);
+      const type = (a.named['-itemtype'] || a.named['-type'] || [])[0];
+      const target = (a.named['-target'] || a.named['-value'] || [])[0];
+      const at = (a.named['-path'] || [])[0] || a.positional[0];
+      if (type && /^(symboliclink|junction|hardlink)$/i.test(type.text) && target && at && !target.dynamic && !at.dynamic) {
+        const atAbs = resolvePath(at.text, cwd);
+        const toAbs = resolvePath(target.text, cwd);
+        if (atAbs && toAbs) aliases.push({ at: atAbs, to: viaAlias(toAbs) });
+      }
+      return undefined;
+    }
     if (LISTERS.has(prog) || (QUIET.has(prog) && !(ps && PS_READERS.has(prog)))) return undefined;
 
     if (prog === 'git') { gitCommand(args, cwd); return undefined; }
@@ -605,9 +645,14 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       const a = psArgs(args);
       const paths = [];
       for (const name of PS_PATH_PARAMS) paths.push(...(a.named[name] || []));
-      paths.push(...(['copy-item', 'copy', 'cp', 'cpi'].includes(prog) ? a.positional.slice(0, 1) : a.positional));
+      const copy = ['copy-item', 'copy', 'cp', 'cpi'].includes(prog);
+      paths.push(...(copy ? a.positional.slice(0, 1) : a.positional));
       if (!paths.length) pipedSearch(c, cwd, prog, true, dl);
-      for (const w of paths) readTarget(w, cwd, prog, false);
+      // Copy-Item -Recurse copies a whole folder, so it reads everything in it.
+      const recurse = copy && args.some((w) => !w.dynamic && w.text.length > 1 && '-recurse'.startsWith(w.text.toLowerCase()));
+      for (const w of paths) readTarget(w, cwd, prog, recurse);
+      const dest = copy ? ((a.named['-destination'] || [])[0] || a.positional[1]) : null;
+      if (dest) relocate('cp', paths, dest, cwd);
       return undefined;
     }
 
@@ -649,8 +694,59 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       }
     }
     if (prog === 'cp' && !has('-t', '--target-directory')) files = operands.slice(0, -1);
-    for (const w of files) readTarget(w, cwd, prog, false);
+    // cp -r / -a copies a whole folder, so it reads everything in it.
+    const copiesFolders = prog === 'cp' && ([...named_.keys()].some((f) => !f.startsWith('--') && /^-[a-zA-Z]*[rRa][a-zA-Z]*$/.test(f)) || has('--recursive', '--archive'));
+    for (const w of files) readTarget(w, cwd, prog, copiesFolders);
+    if (prog === 'cp') {
+      const into = [...(named_.get('-t') || []), ...(named_.get('--target-directory') || [])][0];
+      if (into) relocate('cp', files, into, cwd, { intoFolder: true });
+      else if (operands.length > 1) relocate('cp', files, operands[operands.length - 1], cwd);
+    }
     return undefined;
+  }
+
+  // mv, cp and ln: every operand but the last is a source (all of them with -t DIR;
+  // a lone `ln -s target` links into the current folder).
+  function moveOrLink(prog, args, cwd) {
+    const operands = [];
+    let targetDir = null;
+    let symbolic = false;
+    let afterDashes = false;
+    for (let k = 0; k < args.length; k++) {
+      const w = args[k];
+      if (!afterDashes && !w.dynamic && w.text === '--') { afterDashes = true; continue; }
+      if (!afterDashes && !w.dynamic && w.text.length > 1 && w.text.startsWith('-')) {
+        if (w.text === '-t' || w.text === '--target-directory') { targetDir = args[k + 1] || null; k++; continue; }
+        if (w.text.startsWith('--target-directory=')) { targetDir = { ...w, text: w.text.slice('--target-directory='.length) }; continue; }
+        if (w.text === '-S' || w.text === '--suffix') { k++; continue; }
+        if (prog === 'ln' && (w.text === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(w.text))) symbolic = true;
+        continue;
+      }
+      operands.push(w);
+    }
+    if (targetDir) { relocate(prog, operands, targetDir, cwd, { symbolic, intoFolder: true }); return; }
+    if (operands.length > 1) relocate(prog, operands.slice(0, -1), operands[operands.length - 1], cwd, { symbolic });
+    else if (prog === 'ln' && operands.length === 1) relocate(prog, operands, null, cwd, { symbolic, intoFolder: true });
+  }
+
+  // Records the new name each source gets (`dest` is a folder they go into, or the
+  // new name of a single source; null means the current folder). A symlink's
+  // relative target counts from the folder the link is made in. A move from outside
+  // the list into it is noted, since afterwards the file reads as part of the list.
+  function relocate(prog, sources, dest, cwd, { symbolic = false, intoFolder = false } = {}) {
+    const destAbs = dest === null ? cwd : dest.dynamic ? null : resolvePath(dest.text, cwd);
+    const st = destAbs ? statOf(viaAlias(destAbs)) : null;
+    const isFolder = intoFolder || sources.length > 1 || (dest !== null && /[\\/]$/.test(dest.text)) || !!(st && st.isDirectory());
+    const linkDir = destAbs ? (isFolder ? destAbs : path.dirname(destAbs)) : null;
+    for (const s of sources) {
+      if (s.dynamic) continue;
+      const fromAbs = symbolic && !path.isAbsolute(s.text) ? (linkDir ? path.resolve(linkDir, s.text) : null) : resolvePath(s.text, cwd);
+      if (!fromAbs) continue;
+      const from = viaAlias(fromAbs);
+      const to = destAbs ? (isFolder ? path.join(destAbs, path.basename(fromAbs)) : destAbs) : null;
+      if (to) aliases.push({ at: to, to: from });
+      if (prog === 'mv' && statOf(from)) out.moves.push({ from, to, program: prog });
+    }
   }
 
   // git: subcommands that print no file contents pass. `git grep` is a search of
@@ -815,6 +911,11 @@ export function decide(command, { dialect, cwd, scriptsDir, root, rules }) {
   for (const n of once(found.named, 'path')) {
     if (rules.reasonFor(n.path)) {
       return { decision: 'ask', reason: `Margin focus is on, and this command (${n.program}) names ${show(n.path)}, which isn't in the focus list (${rules.list}). Allow it only if Claude reading that is fine.` };
+    }
+  }
+  for (const m of found.moves) {
+    if (rules.reasonFor(m.from) && (m.to === null || !rules.reasonFor(m.to))) {
+      return { decision: 'ask', reason: `Margin focus is on, and this command (${m.program}) moves ${show(m.from)}, which isn't in the focus list (${rules.list}), into ${m.to ? show(m.to) : 'a folder Margin can’t tell'}, where Claude could then read it. Allow it only if that's fine.` };
     }
   }
   for (const u of found.unknown) {
