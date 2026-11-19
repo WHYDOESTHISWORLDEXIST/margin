@@ -239,6 +239,12 @@ export const hasMarginMarker = (dir) =>
 //    at or above it that already has Margin set up (.margin/settings.json or
 //    .margin/focus.json), so a second .margin isn't made below one that exists;
 //    else the nearest folder with .git; else the current folder.
+// The folder a hook's tool call ran in (the hook input's cwd, which follows a cd),
+// else the project folder. A relative path in the tool's input is relative to it.
+export function toolCwd(input, root) {
+  return input && typeof input.cwd === 'string' && input.cwd.trim() ? path.resolve(input.cwd) : root;
+}
+
 export function projectDir(input = {}) {
   if (projectFlag === undefined) scriptArgs();
   const explicit = usableDir(process.env.CLAUDE_PROJECT_DIR) || usableDir(projectFlag);

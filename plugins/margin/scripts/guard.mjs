@@ -9,7 +9,7 @@
 // (never its edits) with a message saying how to repair it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdinJson, projectDir, marginDir, focusPath, isSetUp, readFocus, focusRules, isInside, rel, writeJson, appendLine, newSnapshot, realPath, fileKey } from './lib.mjs';
+import { readStdinJson, projectDir, toolCwd, marginDir, focusPath, isSetUp, readFocus, focusRules, isInside, rel, writeJson, appendLine, newSnapshot, realPath, fileKey } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -36,8 +36,8 @@ function deny(reason) {
 // Read and Grep only reach what the focus list allows (lib.focusRules, shared
 // with the shell guard). Grep searches the folder it runs in (the hook's cwd, which
 // can be a subfolder after a cd), or a path relative to that folder; without a cwd,
-// the project root.
-const hookCwd = typeof input.cwd === 'string' && input.cwd.trim() ? path.resolve(input.cwd) : root;
+// the project root. Any relative file path counts from that folder too.
+const hookCwd = toolCwd(input, root);
 
 function checkFocus() {
   if (!hasFocus || !READ_TOOLS.includes(tool)) return;
@@ -45,7 +45,7 @@ function checkFocus() {
   if (focus.state === 'ok' && !focus.enabled) return;
   const rules = focusRules(root, input, focus);
   const reason = tool === 'Read'
-    ? (args.file_path ? rules.reasonFor(path.resolve(root, args.file_path)) : null)
+    ? (args.file_path ? rules.reasonFor(path.resolve(hookCwd, args.file_path)) : null)
     : rules.searchReasonFor(args.path ? path.resolve(hookCwd, args.path) : hookCwd);
   if (reason) deny(reason);
 }
@@ -58,7 +58,7 @@ function protectMargin() {
   if (!EDIT_TOOLS.includes(tool)) return;
   const file = args.file_path || args.notebook_path;
   if (typeof file !== 'string' || !file) return;
-  const target = path.resolve(root, file);
+  const target = path.resolve(hookCwd, file);
   if (!isInside(realPath(target), realPath(marginDir(root)))) return;
   if (fileKey(root, realPath(target)) === fileKey(root, realPath(path.join(marginDir(root), 'plan.json')))) return;
   deny("Margin's own files are changed with its commands (/margin:focus, /margin:review, /margin:setup), not edited directly. Ask the writer to run the command.");
@@ -77,7 +77,7 @@ function backUp() {
   if (!setUp || !EDIT_TOOLS.includes(tool)) return;
   const file = args.file_path || args.notebook_path;
   if (!file) return;
-  const target = path.resolve(root, file);
+  const target = path.resolve(hookCwd, file);
   if (isInside(target, marginDir(root)) || !input.tool_use_id) return;
   const historyDir = path.join(marginDir(root), 'history');
   let snapshot = null;

@@ -123,6 +123,28 @@ test('edits are backed up, logged and can be undone', () => {
   assert(fs.readFileSync(file, 'utf8') === before, 'undo should restore the original');
 });
 
+test('a relative path is the file in the folder the tool ran in: backup, log, undo and focus (T9)', () => {
+  const dir = project();
+  setUp(dir);
+  const notes = path.join(dir, 'notes');
+  const file = path.join(notes, 'interviews.md');
+  const readText = (p) => fs.readFileSync(p, 'utf8');
+  const before = readText(file);
+  const edit = (event) => ({ cwd: notes, tool_name: 'Edit', tool_input: { file_path: 'interviews.md' }, tool_use_id: 'toolu_rel', hook_event_name: event });
+  const pre = run('guard.mjs', [], dir, edit('PreToolUse'));
+  assert(pre.code === 0 && pre.out === '', `${pre.out}${pre.err}`);
+  fs.writeFileSync(file, 'changed by Claude\n');
+  run('log-change.mjs', [], dir, edit('PostToolUse'));
+  const list = run('review.mjs', ['list'], dir).out;
+  assert(list.includes('edited') && list.includes('notes/interviews.md') && !list.includes('created'), `the change belongs to notes/interviews.md: ${list}`);
+  const undo = run('review.mjs', ['undo', '1'], dir);
+  assert(readText(file) === before && !fs.existsSync(path.join(dir, 'interviews.md')), `undo should restore notes/interviews.md: ${undo.out}${undo.err}`);
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const read = (cwd, filePath) => run('guard.mjs', [], dir, { cwd, tool_name: 'Read', tool_input: { file_path: filePath }, tool_use_id: 'toolu_r', hook_event_name: 'PreToolUse' }).out;
+  assert(read(path.join(dir, 'drafts'), 'ch3.md') === '', 'drafts/ch3.md is in the focus list');
+  assert(read(notes, 'private.md').includes('"deny"'), 'notes/private.md is not');
+});
+
 test('a file Claude created is moved to trash on undo, not deleted', () => {
   const dir = project();
   setUp(dir);

@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readStdinJson, projectDir, focusPath, marginDir, readFocus, focusRules, appendLine } from './lib.mjs';
+import { readStdinJson, projectDir, toolCwd, focusPath, marginDir, readFocus, focusRules, appendLine } from './lib.mjs';
 
 const input = readStdinJson();
 const root = projectDir(input);
@@ -34,7 +34,7 @@ try {
   const { decide } = await import('./shell-check.mjs');
   const result = decide(command, {
     dialect: input.tool_name === 'PowerShell' ? 'powershell' : 'bash',
-    cwd: typeof input.cwd === 'string' && input.cwd.trim() ? path.resolve(input.cwd) : root,
+    cwd: toolCwd(input, root),
     scriptsDir: path.dirname(fileURLToPath(import.meta.url)),
     root,
     rules
