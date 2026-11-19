@@ -49,6 +49,9 @@ const PS_READERS = new Set([
   'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ugrep', 'iconv', 'base64', 'md5sum', 'sha1sum', 'sha256sum', 'bat', 'dd'
 ]);
 const SEARCHERS = new Set(['grep', 'egrep', 'fgrep', 'zgrep', 'rg', 'ag', 'ack', 'ugrep', 'findstr', 'select-string', 'sls']);
+// Programs that pack or copy whole folders named by a bare word: `tar czf - notes`.
+const ARCHIVERS = new Set(['tar', 'bsdtar', 'gtar', 'zip', '7z', '7za', '7zr', 'rar', 'ditto', 'rsync', 'scp', 'cpio', 'pax',
+  'gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'compress-archive']);
 const SEARCH_BY_DEFAULT = new Set(['rg', 'ag', 'ack', 'ugrep']);
 const LISTERS = new Set(['ls', 'dir', 'vdir', 'tree', 'find', 'gfind', 'fd', 'fdfind', 'get-childitem', 'gci', 'get-item', 'gi']);
 // Programs that don't show file contents to Claude.
@@ -465,13 +468,15 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
 
   // Existing paths an interpreter or unknown program names: the writer is asked.
   // Only words that look like paths count, so "npm test" or "make docs" don't
-  // prompt just because a folder of that name exists.
-  function named(w, cwd, program) {
+  // prompt just because a folder of that name exists. `bare`: the word is known to
+  // be a name even without a / or an extension (after `--`, or for an archiver).
+  // `operand`: it comes after `--`, so a leading - is part of the name.
+  function named(w, cwd, program, { bare = false, operand = false } = {}) {
     if (w.dynamic || !w.text || DEVICE.test(w.text)) return;
     let text = w.text;
-    if (/^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
+    if (!operand && /^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
     if (/^\.\.?$/.test(text)) return; // a bare "." or ".." is the current folder: "git add .", "pip install ."
-    if (!/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
+    if (!bare && !/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
     const p = resolvePath(w.glob ? globFolder(text) : text, cwd);
     if (p !== null && statOf(p)) out.named.push({ path: p, program });
   }
@@ -573,7 +578,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (prog === 'git' && QUIET_GIT.has(gitSubcommand(args))) return undefined;
 
     const readers = ps ? PS_READERS : POSIX_READERS;
-    if (!readers.has(prog)) { for (const w of args) named(w, cwd, prog); return undefined; }
+    if (!readers.has(prog)) { otherProgram(prog, args, cwd); return undefined; }
 
     if (prog === 'dd') { for (const w of args) if (w.text.startsWith('if=')) readTarget({ ...w, text: w.text.slice(3) }, cwd, prog, false); return undefined; }
     if (ps && (prog === 'select-string' || prog === 'sls')) {
@@ -643,6 +648,18 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (prog === 'cp' && !has('-t', '--target-directory')) files = operands.slice(0, -1);
     for (const w of files) readTarget(w, cwd, prog, false);
     return undefined;
+  }
+
+  // A program Margin doesn't know: an existing path it names outside the list asks.
+  // After `--` every word is a name, and archivers take bare folder names, so those
+  // count even without a / or an extension: `git show HEAD -- notes`, `tar czf - notes`.
+  function otherProgram(prog, args, cwd) {
+    const archiver = ARCHIVERS.has(prog);
+    let afterDashes = false;
+    for (const w of args) {
+      if (!afterDashes && w.text === '--' && !w.dynamic) { afterDashes = true; continue; }
+      named(w, cwd, prog, { bare: archiver || afterDashes, operand: afterDashes });
+    }
   }
 
   // xargs runs a command on names it reads from its input, or from the file -a names

@@ -1101,7 +1101,12 @@ const SHELL_TABLE = [
   ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask'],
   // T4: switches don't swallow the file after them (column -t, od -w); real value options still do.
   ['bash', 'column -t notes/private.md', 'deny'], ['bash', 'column -t drafts/ch3.md', 'allow'], ['bash', 'column -s , -t notes/private.md', 'deny'],
-  ['bash', 'od -w notes/private.md', 'deny'], ['bash', 'od -w16 -c notes/private.md', 'deny'], ['bash', 'od -t x1 drafts/ch3.md', 'allow']
+  ['bash', 'od -w notes/private.md', 'deny'], ['bash', 'od -w16 -c notes/private.md', 'deny'], ['bash', 'od -t x1 drafts/ch3.md', 'allow'],
+  // T2: a bare folder name counts after `--` and for archivers; other programs still need a / or an extension.
+  ['bash', 'tar czf - sources | tar xzOf -', 'ask'], ['bash', 'tar czf - drafts | tar xzOf -', 'allow'], ['bash', 'tar -C sources -cf - . | tar -xOf -', 'ask'],
+  ['bash', 'ditto -c -k sources - | funzip', 'ask'], ['bash', 'zip -qr - sources | funzip', 'ask'], ['bash', 'git show HEAD -- sources', 'ask'],
+  ['bash', 'git log -p -- sources', 'ask'], ['bash', 'git show HEAD -- drafts', 'allow'], ['bash', 'make sources', 'allow'], ['bash', 'npm run sources', 'allow'],
+  ['powershell', 'Compress-Archive -Path sources -DestinationPath out.zip', 'ask'], ['powershell', 'tar -cf - sources', 'ask']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {
