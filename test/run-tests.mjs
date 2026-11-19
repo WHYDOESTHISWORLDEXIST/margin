@@ -827,8 +827,11 @@ test('organize records the moves made before a step fails, so undo puts them bac
     { from: 'c.md', to: 'archive/c.md' }
   ]);
   assert(res.code === 0 && res.err === '' && res.out.includes('skipped drafts/ch3.md') && res.out.includes('2 of 3 moved'), `${res.out}${res.err}`);
+  // T12: the writer is pointed to the slash command, and times are local.
+  assert(res.out.includes('/margin:organize undo') && !res.out.includes('node move.mjs'), res.out);
   const undo = run('move.mjs', ['undo'], dir);
   assert(fs.existsSync(path.join(dir, 'a.md')) && fs.existsSync(path.join(dir, 'c.md')) && undo.out.includes('Put back 2 of 2'), `${undo.out}${undo.err}`);
+  assert(/moved at \d{4}-\d\d-\d\d \d\d:\d\d\./.test(undo.out) && !/\d{4}-\d\d-\d\dT\d\d/.test(undo.out), undo.out);
 });
 
 test('organize refuses .git, .margin, node_modules, the project folder and a folder moved into itself', () => {
@@ -860,7 +863,7 @@ test('organize undo keeps the moves it couldn\'t put back, and a second undo fin
   plan(dir, [{ from: 'x.md', to: 'archive/x.md' }, { from: 'y.md', to: 'archive/y.md' }]);
   fs.writeFileSync(path.join(dir, 'y.md'), 'a new y.md the writer made meanwhile\n');
   const first = run('move.mjs', ['undo'], dir);
-  assert(first.out.includes('Put back 1 of 2') && first.out.includes('undo again') && fs.existsSync(path.join(dir, 'archive/y.md')), first.out);
+  assert(first.out.includes('Put back 1 of 2') && first.out.includes('/margin:organize undo puts it back') && fs.existsSync(path.join(dir, 'archive/y.md')), first.out);
   fs.renameSync(path.join(dir, 'y.md'), path.join(dir, 'y (new).md'));
   const second = run('move.mjs', ['undo'], dir);
   assert(second.out.includes('Put back 1 of 1') && readText(path.join(dir, 'y.md')) === 'y\n', second.out);
