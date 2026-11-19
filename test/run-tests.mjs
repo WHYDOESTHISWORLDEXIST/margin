@@ -1839,6 +1839,10 @@ test('a note that is already queued or dismissed is not added again, and the cou
   // Only notes that were really added are counted: an invalid one is neither.
   const bad = run('suggestions.mjs', ['add', JSON.stringify([{ file: 'x.md' }, { file: 'drafts/ch3.md', message: 'fresh one' }])], dir);
   assert(bad.out.includes('Each note needs') && bad.out.includes('1 new, 0 already queued or dismissed.'), bad.out);
+  // ... and the command fails, so the skipped note isn't mistaken for queued (T11).
+  assert(bad.code === 1 && bad.out.includes('1 note was not queued.'), `exit ${bad.code}: ${bad.out}`);
+  const flagsBad = run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--line', '3'], dir);
+  assert(flagsBad.code === 1 && flagsBad.out.includes('not queued'), `exit ${flagsBad.code}: ${flagsBad.out}`);
 });
 
 // A2-06: the same wording at different places stays separate notes; each stored note

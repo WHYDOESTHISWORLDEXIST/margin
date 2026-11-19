@@ -113,8 +113,9 @@ if (command === 'add') {
   }
   const list = Array.isArray(incoming) ? incoming : [incoming];
   const fresh = [];
+  let skipped = 0;
   for (const n of list) {
-    if (!isPlainObject(n) || !n.file || !n.message) { console.log('Each note needs "file" and "message".'); continue; }
+    if (!isPlainObject(n) || !n.file || !n.message) { console.log('Each note needs "file" and "message".'); skipped++; continue; }
     const item = {
       id: crypto.randomBytes(3).toString('hex'),
       file: onDiskSpelling(root, rel(root, String(n.file))), // as on disk, so the companion finds it
@@ -137,6 +138,8 @@ if (command === 'add') {
   }
   if (added || loaded.damaged) writeJsonAtomic(file, data);
   console.log(`${added} new, ${already} already queued or dismissed. ${data.items.filter((i) => i.status === 'open').length} open in total.`);
+  // A note that couldn't be queued is a failure, even when the others were.
+  if (skipped) { console.log(`${skipped} ${skipped === 1 ? 'note was' : 'notes were'} not queued.`); process.exit(1); }
 } else if (command === 'list') {
   if (loaded.damaged) {
     console.log(`${damaged()} Its notes can't be listed. The next note added keeps the damaged file aside and starts a new list.`);
