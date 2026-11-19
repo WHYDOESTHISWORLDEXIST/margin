@@ -149,7 +149,7 @@ function tokenize(src, dialect, vars, depth) {
   const heredocs = [];         // [{ delim, strip, cmd }] waiting for the next line
   let i = 0;
 
-  function newCommand(pipedFrom) { return { words: [], inputs: [], heredocs: [], pipedFrom, callOp: false }; }
+  function newCommand(pipedFrom) { return { words: [], inputs: [], heredocs: [], herestrings: [], pipedFrom, callOp: false }; }
   // quoted: part of the word was quoted or escaped. inner: the text of a PowerShell
   // ( ... ) argument, kept so a .NET call's arguments can be looked at.
   function startWord() { if (!word) word = { text: '', dynamic: false, glob: false, onlyVar: null, quoted: false }; }
@@ -164,7 +164,8 @@ function tokenize(src, dialect, vars, depth) {
       if (r === 'in') cmd.inputs.push(w);
       // An unquoted delimiter (<<EOF) means bash expands $( ) in the body.
       else if (r === 'here') heredocs.push({ delim: w.text, strip: heredocStrip, cmd, expand: !w.quoted });
-      return; // output targets, here-strings and fd numbers aren't reads
+      else if (r === 'herestring') cmd.herestrings.push(w); // the command's input: code, if it's a shell
+      return; // output targets and fd numbers aren't reads
     }
     cmd.words.push(w);
   }
@@ -563,11 +564,18 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (SHELLS[prog]) {
       const code = inlineShellCode(prog, args);
       const inner = SHELLS[prog];
-      if (code !== null) {
-        if (depth < MAX_DEPTH) run(code, inner, cwd, depth + 1); else out.unknown.push({ word: code, program: prog });
-        return undefined;
+      const runCode = (text) => { if (depth < MAX_DEPTH) run(text, inner, cwd, depth + 1); else out.unknown.push({ word: text, program: prog }); };
+      if (code !== null && code !== '-') { runCode(code); return undefined; }
+      for (const h of c.heredocs) runCode(h);
+      // With no -c and no script file (or with -s, or -Command -), a shell runs the
+      // code on its input: a here-string, or what the command before it prints.
+      if (code === '-' || readsCodeFromInput(prog, args)) {
+        for (const s of c.herestrings || []) { if (s.dynamic) out.unknown.push({ word: s.text || '(a variable)', program: prog }); else runCode(s.text); }
+        if (c.pipedFrom) {
+          const text = literalOutput(c.pipedFrom, dl);
+          if (text === null) out.unknown.push({ word: 'code from its input', program: prog }); else runCode(text);
+        }
       }
-      for (const h of c.heredocs) if (depth < MAX_DEPTH) run(h, inner, cwd, depth + 1);
       for (const w of args) named(w, cwd, prog);
       return undefined;
     }
@@ -961,6 +969,51 @@ function inlineShellCode(prog, args) {
   }
   const at = args.findIndex((w) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w.text));
   return at >= 0 && args[at + 1] ? args[at + 1].text : null;
+}
+
+// Whether a shell started without -c runs the code on its input: bash and friends
+// do when given no script file, or -s; PowerShell and cmd when given no command or
+// file (inlineShellCode returns '-' for pwsh -Command -).
+const SHELL_OPTS_WITH_VALUE = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
+function readsCodeFromInput(prog, args) {
+  if (prog === 'cmd') return !args.some((w) => /^\/[ck]$/i.test(w.text));
+  if (prog === 'pwsh' || prog === 'powershell') return !args.some((w) => /^-(f|file|c|command|encodedcommand|e|ec)$/i.test(w.text)) && args.every((w) => w.text.startsWith('-'));
+  let operands = 0;
+  for (let k = 0; k < args.length; k++) {
+    const t = args[k].text;
+    if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(t)) return true;
+    if (SHELL_OPTS_WITH_VALUE.has(t)) { k++; continue; }
+    if (/^[-+]/.test(t)) continue;
+    operands++;
+  }
+  return operands === 0;
+}
+
+const unescapeEcho = (t) => t.replace(/\\(n|t|\\)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'));
+
+// What a command prints when it is all literal text: echo/printf/Write-Output with
+// fixed words, cat with a here-document, or a PowerShell string on its own. null
+// when it can't be known (a file, a variable, a download).
+function literalOutput(src, dl) {
+  const words = stripPrefix(src.words);
+  if (!words.length || words[0].dynamic) return null;
+  const rest = words.slice(1);
+  if (rest.some((w) => w.dynamic)) return null;
+  if (dl === 'powershell' && words.length === 1 && words[0].quoted && !src.callOp) return words[0].text;
+  const p = programName(words[0].text);
+  if (p === 'echo' || p === 'write-output' || p === 'write') {
+    let k = 0;
+    let escapes = false;
+    if (dl !== 'powershell') while (rest[k] && /^-[neE]+$/.test(rest[k].text)) { if (rest[k].text.includes('e')) escapes = true; k++; }
+    const text = rest.slice(k).map((w) => w.text).join(' ');
+    return escapes ? unescapeEcho(text) : text;
+  }
+  if (p === 'printf') return rest.length ? unescapeEcho(rest.map((w) => w.text).join(' ')) : null;
+  if (p === 'cat' && !rest.length) {
+    const parts = [...src.heredocs, ...(src.herestrings || []).map((w) => w.text)];
+    return parts.length ? parts.join('\n') : null;
+  }
+  return null;
 }
 
 // The commands inside $( ... ) and backticks in a stretch of text: bash expands them
