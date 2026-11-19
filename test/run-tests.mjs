@@ -1023,6 +1023,23 @@ test('focus remove matches names as the drive does and says when one isn\'t in t
   assert(none.code === 0 && none.out.startsWith('Not in the list: chapters.') && fs.statSync(marginPath(dir, 'focus.json')).mtimeMs === before, `${none.out}`);
 });
 
+test('focus add of a folder outside the project keeps its full path and says so (T10)', () => {
+  const dir = project();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'margin outside '));
+  made.push(outside);
+  fs.writeFileSync(path.join(outside, 'research.md'), 'Field notes.\n');
+  const stored = () => JSON.parse(fs.readFileSync(marginPath(dir, 'focus.json'), 'utf8')).paths;
+  const full = path.resolve(outside).split(path.sep).join('/');
+  const added = run('focus.mjs', ['add', outside], dir);
+  assert(stored().includes(full) && added.out.includes('is outside this project'), `${added.out} ${JSON.stringify(stored())}`);
+  const read = run('guard.mjs', [], dir, { cwd: dir, tool_name: 'Read', tool_input: { file_path: path.join(outside, 'research.md') }, tool_use_id: 'toolu_o', hook_event_name: 'PreToolUse' });
+  assert(read.out === '', `a folder the writer added is readable: ${read.out}`);
+  const up = run('focus.mjs', ['add', '..'], dir);
+  assert(up.out.includes('holds the whole project') && stored().includes(path.resolve(dir, '..').split(path.sep).join('/')), up.out);
+  const removed = run('focus.mjs', ['remove', outside], dir);
+  assert(!stored().includes(full), removed.out);
+});
+
 // --- Shell commands under focus (A-04/B-04, K7) ---
 
 const shellCheck = await import(pathToFileURL(path.join(scripts, 'shell-check.mjs')).href);

@@ -3,7 +3,7 @@
 // A damaged focus list is repaired first (a copy is kept), whatever the command.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel, onDiskSpelling, sameFile } from './lib.mjs';
+import { projectDir, scriptArgs, readFocus, repairFocus, saveFocus, rel, onDiskSpelling, sameFile, isInside } from './lib.mjs';
 
 const root = projectDir();
 const [command = 'status', ...items] = scriptArgs();
@@ -58,12 +58,26 @@ switch (command) {
     if (!items.length) { say('Name at least one file or folder to add.'); process.exit(1); }
     const exists = (p) => fs.existsSync(path.resolve(root, p));
     const missing = [];
+    const notes = [];
     let found = 0;
     for (const item of rejoin(items, exists)) {
       if (!exists(item)) { missing.push(item); continue; }
       found++;
-      const r = onDiskSpelling(root, rel(root, item));
-      if (!focus.paths.includes(r)) focus.paths.push(r);
+      // Inside the project, a path is kept relative to it. Outside it (or a folder
+      // around the whole project), it's kept as a full path, so it still means the
+      // same place if the project folder moves, and the writer is told what it opens.
+      const abs = path.resolve(root, item);
+      const isRoot = sameFile(root, abs, root);
+      let entry;
+      if (isRoot || !isInside(abs, root)) {
+        entry = isRoot ? '.' : abs.split(path.sep).join('/');
+        notes.push(isInside(root, abs)
+          ? `${entry} holds the whole project, so focus won't keep Claude out of anything in it.`
+          : `${entry} is outside this project. While focus is on, Claude may read it too.`);
+      } else {
+        entry = onDiskSpelling(root, rel(root, item));
+      }
+      if (!focus.paths.includes(entry)) focus.paths.push(entry);
     }
     if (!found) {
       // Only typos: change nothing, rather than switching focus on with nothing to read.
@@ -75,6 +89,7 @@ switch (command) {
     focus.enabled = true;
     saveFocus(root, focus);
     if (missing.length) say(`Not found, skipped: ${missing.join(', ')}`);
+    for (const note of notes) say(`Note: ${note}`);
     if (wasOff) say('Focus turned ON.');
     show();
     break;
