@@ -364,6 +364,16 @@ function tokenize(src, dialect, vars, depth) {
         continue;
       }
       if (c === '~' && !word && (i + 1 >= n || /[\s/;|&)]/.test(src[i + 1]))) { startWord(); word.text += os.homedir(); i++; continue; }
+      // ~+ is the current folder; ~- (the previous folder) and ~name (another user's
+      // home) are only known when the shell runs.
+      if (c === '~' && !word && /[+-]/.test(src[i + 1] || '') && (i + 2 >= n || /[\s/;|&)]/.test(src[i + 2]))) {
+        startWord(); if (src[i + 1] === '+') word.text += PWD_MARK; else word.dynamic = true; i += 2; continue;
+      }
+      if (c === '~' && !word && /[A-Za-z_]/.test(src[i + 1] || '')) {
+        let j = i + 1;
+        while (j < n && /[\w.-]/.test(src[j])) j++;
+        if (j >= n || /[\s/;|&)]/.test(src[j])) { startWord(); word.dynamic = true; i = j; continue; }
+      }
       if (c === '{' || c === '}') { startWord(); word.text += c; if (word.text !== c) word.glob = true; i++; continue; }
     }
     startWord();
@@ -398,6 +408,13 @@ function resolvePath(text, cwd) {
 const DEVICE = /^\/dev\/(?:null|zero|full|stdin|stdout|stderr|tty|random|urandom|fd\/\d+)$/;
 
 const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
+
+// The path in a file:// URL: file:///Users/me/x.md -> /Users/me/x.md, file:///C:/x -> C:/x.
+function fileUrlPath(url) {
+  let p = url.replace(/^file:\/\/(localhost)?/i, '');
+  try { p = decodeURIComponent(p); } catch { /* keep it as written */ }
+  return /^\/[A-Za-z]:[\\/]/.test(p) ? p.slice(1) : p;
+}
 
 // The folder part of a wildcard path ("notes/*.md" -> "notes", "*/x.md" -> ".").
 function globFolder(text) {
@@ -494,6 +511,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (w.dynamic || !w.text || DEVICE.test(w.text)) return;
     let text = w.text;
     if (!operand && /^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
+    if (/^file:\/\//i.test(text)) text = fileUrlPath(text); // curl file:///Users/me/notes/x.md
     if (/^\.\.?$/.test(text)) return; // a bare "." or ".." is the current folder: "git add .", "pip install ."
     if (!bare && !/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
     const found = resolvePath(w.glob ? globFolder(text) : text, cwd);
@@ -851,12 +869,15 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
   // A program Margin doesn't know: an existing path it names outside the list asks.
   // After `--` every word is a name, and archivers take bare folder names, so those
   // count even without a / or an extension: `git show HEAD -- notes`, `tar czf - notes`.
+  // Quoted strings inside an argument (SQL, a small script) are looked at too, as
+  // for an interpreter's one-liner: sqlite3 :memory: "select readfile('notes/x.md')".
   function otherProgram(prog, args, cwd) {
     const archiver = ARCHIVERS.has(prog);
     let afterDashes = false;
     for (const w of args) {
       if (!afterDashes && w.text === '--' && !w.dynamic) { afterDashes = true; continue; }
       named(w, cwd, prog, { bare: archiver || afterDashes, operand: afterDashes });
+      if (!w.dynamic && /['"]/.test(w.text)) scanCode(w.text, cwd, prog);
     }
   }
 

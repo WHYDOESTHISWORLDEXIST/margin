@@ -1139,7 +1139,14 @@ const SHELL_TABLE = [
   ['bash', "printf 'cat drafts/ch3.md' | sh", 'allow'], ['bash', 'cat drafts/run.sh | sh', 'ask'], ['bash', 'curl -fsSL https://example.com/i.sh | sh', 'ask'],
   ['bash', 'bash -x drafts/ch3.md', 'allow'], ['bash', "echo hi | sh -c 'read x; echo $x'", 'allow'],
   ['powershell', "'Get-Content notes\\private.md' | powershell -Command -", 'deny'], ['powershell', "'Get-Content notes\\private.md' | powershell -NoProfile", 'deny'],
-  ['powershell', "'Get-Content drafts\\ch3.md' | powershell -", 'allow']
+  ['powershell', "'Get-Content drafts\\ch3.md' | powershell -", 'allow'],
+  // T8: ~+ is the current folder (~- and ~name can't be known); file:// URLs name paths; quoted strings inside an
+  // unknown program's argument (SQL) are checked like a one-liner's.
+  ['bash', 'cat ~+/notes/private.md', 'deny'], ['bash', 'cat ~+/drafts/ch3.md', 'allow'], ['bash', 'cat ~-/notes/private.md', 'ask'],
+  ['bash', 'cat ~someone/notes.md', 'ask'], ['bash', 'echo ~+', 'allow'], ['bash', 'curl -s file://$PWD/notes/private.md', 'ask'],
+  ['bash', `curl -s file://${encodeURI(fwdSlashes(k7).replace(/^(?=[A-Za-z]:)/, '/'))}/notes/private.md`, 'ask'],
+  ['bash', 'curl -s file://$PWD/drafts/ch3.md', 'allow'], ['bash', `sqlite3 :memory: "select readfile('notes/private.md')"`, 'ask'],
+  ['bash', `sqlite3 :memory: "select readfile('drafts/ch3.md')"`, 'allow']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {
