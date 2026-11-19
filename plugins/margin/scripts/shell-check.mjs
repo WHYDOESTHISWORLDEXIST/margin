@@ -6,6 +6,7 @@
 //   searches  folders a recursive search (grep -r, rg, find -exec, ...) would cover
 //   named     existing paths that an interpreter one-liner or an unknown program names
 //   unknown   reader operands that can't be worked out ($VAR, $(...), names from a pipe)
+//   moves     files mv moves: { from, to } (into the list, they ask)
 // Listing names (ls, find, Get-ChildItem), echo/printf text and Margin's own
 // scripts read nothing. Each entry is { path | dir | word, program }.
 import fs from 'node:fs';
@@ -49,12 +50,15 @@ const PS_READERS = new Set([
   'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ugrep', 'iconv', 'base64', 'md5sum', 'sha1sum', 'sha256sum', 'bat', 'dd'
 ]);
 const SEARCHERS = new Set(['grep', 'egrep', 'fgrep', 'zgrep', 'rg', 'ag', 'ack', 'ugrep', 'findstr', 'select-string', 'sls']);
+// Programs that pack or copy whole folders named by a bare word: `tar czf - notes`.
+const ARCHIVERS = new Set(['tar', 'bsdtar', 'gtar', 'zip', '7z', '7za', '7zr', 'rar', 'ditto', 'rsync', 'scp', 'cpio', 'pax',
+  'gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'compress-archive']);
 const SEARCH_BY_DEFAULT = new Set(['rg', 'ag', 'ack', 'ugrep']);
 const LISTERS = new Set(['ls', 'dir', 'vdir', 'tree', 'find', 'gfind', 'fd', 'fdfind', 'get-childitem', 'gci', 'get-item', 'gi']);
 // Programs that don't show file contents to Claude.
 const QUIET = new Set([
   'echo', 'printf', 'true', 'false', 'test', '[', '[[', ':', 'pwd', 'stat', 'du', 'df', 'file', 'which', 'whereis',
-  'realpath', 'readlink', 'basename', 'dirname', 'mkdir', 'rmdir', 'touch', 'rm', 'mv', 'ln', 'chmod', 'chown', 'chgrp',
+  'realpath', 'readlink', 'basename', 'dirname', 'mkdir', 'rmdir', 'touch', 'rm', 'chmod', 'chown', 'chgrp',
   'open', 'xdg-open', 'start', 'code', 'explorer', 'sleep', 'date', 'clear', 'export', 'unset', 'alias', 'read', 'wait',
   'kill', 'ps', 'whoami', 'hostname', 'uname', 'history', 'exit', 'return', 'set', 'shopt', 'tee', 'tr', 'seq',
   'locate', 'trap', 'local', 'declare', 'readonly', 'type' /* bash builtin; PowerShell's type is a reader */,
@@ -71,16 +75,19 @@ const QUIET = new Set([
 // still ask when they name a file outside the list.
 const QUIET_GIT = new Set(['add', 'rm', 'mv', 'commit', 'restore', 'checkout', 'switch', 'reset', 'status', 'push', 'pull', 'fetch', 'tag', 'branch', 'init', 'clone', 'merge', 'rebase', 'clean']);
 const GIT_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
+// git grep options whose value is the next word (-f, the pattern file, is read).
+const GIT_GREP_VALUES = new Set(['-A', '-B', '-C', '-m', '--max-count', '--max-depth', '--threads', '--context', '--after-context', '--before-context']);
+// git subcommands that print a file given as <rev>:<path> (git show HEAD:notes/x.md).
+const GIT_REV_PATH = new Set(['show', 'cat-file', 'diff']);
 
-function gitSubcommand(args) {
-  for (let k = 0; k < args.length; k++) {
-    const t = args[k].text;
-    if (args[k].dynamic) return null;
-    if (GIT_OPTIONS_WITH_VALUE.has(t)) { k++; continue; }
-    if (t.startsWith('-')) continue;
-    return t;
-  }
-  return null;
+// The path in git's <rev>:<path> form ("HEAD:notes/x.md", ":notes/x.md" for the
+// staged copy, ":2:x.md"); null for anything else, including C:\ paths, URLs and
+// user@host:path remotes.
+function revPath(text) {
+  if (!text || text.startsWith('-') || /^[A-Za-z]:[\\/]/.test(text) || /^[A-Za-z][\w+.-]*:\/\//.test(text)) return null;
+  const m = /^(:[0-3]:|[^:]*:)([\s\S]*)$/.exec(text);
+  if (!m || /^[\w.-]+@[\w.-]+:$/.test(m[1])) return null;
+  return m[2];
 }
 
 const CD = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
@@ -97,18 +104,21 @@ const INLINE_CODE = {
   python: ['-c'], python3: ['-c'], python2: ['-c'], py: ['-c'], pypy: ['-c'], pypy3: ['-c'],
   ruby: ['-e'], perl: ['-e', '-E'], php: ['-r'], rscript: ['-e'], lua: ['-e'], osascript: ['-e'], julia: ['-e']
 };
-// Options whose value is the next word (so it isn't taken for a file).
+// Options whose value is the next word (so it isn't taken for a file). Only real
+// value options belong here: a switch listed by mistake would swallow the file name
+// after it (column -t, od -w), and that file would never be checked.
 const OPT_VALUES = {
   head: ['-n', '-c'], tail: ['-n', '-c'], sort: ['-k', '-t', '-T', '-S', '--key', '--field-separator'], cut: ['-d', '-f', '-c', '-b'],
   grep: ['-e', '-f', '-m', '-A', '-B', '-C', '-d', '-D', '--regexp', '--file', '--max-count', '--context'],
   rg: ['-e', '-f', '-g', '-m', '-A', '-B', '-C', '-t', '-T', '-j', '-M', '--glob', '--type', '--type-not', '--max-count', '--regexp', '--file', '--threads', '--sort', '--sortr'],
   ag: ['-G', '-m', '-A', '-B', '-C', '--ignore', '--file-search-regex'], ack: ['--type', '-m'], ugrep: ['-e', '-f', '-m', '-A', '-B', '-C', '-g', '-t'],
   sed: ['-e', '-f', '-l', '--expression', '--file'], awk: ['-f', '-v', '-F', '--file', '--assign', '--field-separator'],
-  diff: ['-U', '-C', '-x', '-X', '--exclude'], od: ['-t', '-N', '-j', '-A', '-w'], xxd: ['-l', '-s', '-c', '-g', '-o'],
+  diff: ['-U', '-C', '-x', '-X', '--exclude'], od: ['-t', '-N', '-j', '-A'] /* -w takes its value attached (-w16) */, xxd: ['-l', '-s', '-c', '-g', '-o'],
   hexdump: ['-n', '-s', '-e', '-f'], jq: ['--indent', '-f', '--from-file'], paste: ['-d'], base64: ['-w'], iconv: ['-f', '-t'],
   fold: ['-w'], fmt: ['-w'], join: ['-1', '-2', '-t', '-o'], split: ['-l', '-b', '-n'], nl: ['-b', '-w', '-s', '-v', '-i'],
   bat: ['-l', '-r', '-H', '--language', '--line-range', '--highlight-line', '--theme', '--style'], cmp: ['-n', '-i'],
-  column: ['-s', '-t'], strings: ['-n', '-t'], less: ['-p', '-x'], tac: ['-s'], cp: ['-t', '-S', '--target-directory', '--suffix']
+  // column: -t (table) is a switch; these take a value (util-linux and BSD).
+  column: ['-s', '-c', '-o', '-n', '-N', '-E', '-H', '-i', '-l', '-O', '-p', '-r', '-R', '-T', '-W'], strings: ['-n', '-t'], less: ['-p', '-x'], tac: ['-s'], cp: ['-t', '-S', '--target-directory', '--suffix']
 };
 for (const alias of ['egrep', 'fgrep', 'zgrep']) OPT_VALUES[alias] = OPT_VALUES.grep;
 for (const alias of ['gawk', 'mawk', 'nawk']) OPT_VALUES[alias] = OPT_VALUES.awk;
@@ -139,7 +149,7 @@ function tokenize(src, dialect, vars, depth) {
   const heredocs = [];         // [{ delim, strip, cmd }] waiting for the next line
   let i = 0;
 
-  function newCommand(pipedFrom) { return { words: [], inputs: [], heredocs: [], pipedFrom, callOp: false }; }
+  function newCommand(pipedFrom) { return { words: [], inputs: [], heredocs: [], herestrings: [], pipedFrom, callOp: false }; }
   // quoted: part of the word was quoted or escaped. inner: the text of a PowerShell
   // ( ... ) argument, kept so a .NET call's arguments can be looked at.
   function startWord() { if (!word) word = { text: '', dynamic: false, glob: false, onlyVar: null, quoted: false }; }
@@ -154,7 +164,8 @@ function tokenize(src, dialect, vars, depth) {
       if (r === 'in') cmd.inputs.push(w);
       // An unquoted delimiter (<<EOF) means bash expands $( ) in the body.
       else if (r === 'here') heredocs.push({ delim: w.text, strip: heredocStrip, cmd, expand: !w.quoted });
-      return; // output targets, here-strings and fd numbers aren't reads
+      else if (r === 'herestring') cmd.herestrings.push(w); // the command's input: code, if it's a shell
+      return; // output targets and fd numbers aren't reads
     }
     cmd.words.push(w);
   }
@@ -353,6 +364,16 @@ function tokenize(src, dialect, vars, depth) {
         continue;
       }
       if (c === '~' && !word && (i + 1 >= n || /[\s/;|&)]/.test(src[i + 1]))) { startWord(); word.text += os.homedir(); i++; continue; }
+      // ~+ is the current folder; ~- (the previous folder) and ~name (another user's
+      // home) are only known when the shell runs.
+      if (c === '~' && !word && /[+-]/.test(src[i + 1] || '') && (i + 2 >= n || /[\s/;|&)]/.test(src[i + 2]))) {
+        startWord(); if (src[i + 1] === '+') word.text += PWD_MARK; else word.dynamic = true; i += 2; continue;
+      }
+      if (c === '~' && !word && /[A-Za-z_]/.test(src[i + 1] || '')) {
+        let j = i + 1;
+        while (j < n && /[\w.-]/.test(src[j])) j++;
+        if (j >= n || /[\s/;|&)]/.test(src[j])) { startWord(); word.dynamic = true; i = j; continue; }
+      }
       if (c === '{' || c === '}') { startWord(); word.text += c; if (word.text !== c) word.glob = true; i++; continue; }
     }
     startWord();
@@ -388,6 +409,13 @@ const DEVICE = /^\/dev\/(?:null|zero|full|stdin|stdout|stderr|tty|random|urandom
 
 const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
 
+// The path in a file:// URL: file:///Users/me/x.md -> /Users/me/x.md, file:///C:/x -> C:/x.
+function fileUrlPath(url) {
+  let p = url.replace(/^file:\/\/(localhost)?/i, '');
+  try { p = decodeURIComponent(p); } catch { /* keep it as written */ }
+  return /^\/[A-Za-z]:[\\/]/.test(p) ? p.slice(1) : p;
+}
+
 // The folder part of a wildcard path ("notes/*.md" -> "notes", "*/x.md" -> ".").
 function globFolder(text) {
   const parts = text.split(/[\\/]/);
@@ -396,13 +424,25 @@ function globFolder(text) {
   return fixed.length ? fixed.join('/') || '/' : '.';
 }
 
-export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = null } = {}) {
-  const out = { reads: [], searches: [], named: [], unknown: [] };
+export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = null, root = null } = {}) {
+  const out = { reads: [], searches: [], named: [], unknown: [], moves: [] };
   const scriptsReal = scriptsDir ? safeReal(scriptsDir) : null;
+  // Names that mv, cp or ln give things earlier in this command line: a later read
+  // through the new name is judged by where the file really is, since the check
+  // runs before any of it exists (ln -s ../notes drafts/x; cat drafts/x/a.md).
+  const aliases = [];
   run(command, dialect, cwd, 0);
   return out;
 
   function safeReal(p) { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } }
+  function viaAlias(p) {
+    const key = (s) => (IS_WINDOWS || process.platform === 'darwin' ? s.toLowerCase() : s);
+    for (let i = aliases.length - 1; i >= 0; i--) {
+      const { at, to } = aliases[i];
+      if (key(p) === key(at) || key(p).startsWith(key(at) + path.sep)) return to + p.slice(at.length);
+    }
+    return p;
+  }
 
   // Runs a command line, following its current folder: `cd`, `pushd`/`popd` (null
   // when it can't be known), and subshells, after which the folder is as before.
@@ -447,13 +487,15 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (w.dynamic) { out.unknown.push({ word: w.text || '(a variable)', program }); return; }
     if (DEVICE.test(w.text)) return;
     if (w.glob) {
-      const dir = resolvePath(globFolder(w.text), cwd);
-      if (dir === null) { out.unknown.push({ word: w.text, program }); return; }
+      const found = resolvePath(globFolder(w.text), cwd);
+      if (found === null) { out.unknown.push({ word: w.text, program }); return; }
+      const dir = viaAlias(found);
       if (statOf(dir)) out.searches.push({ dir, program });
       return;
     }
-    const p = resolvePath(w.text, cwd);
-    if (p === null) { out.unknown.push({ word: w.text, program }); return; }
+    const found = resolvePath(w.text, cwd);
+    if (found === null) { out.unknown.push({ word: w.text, program }); return; }
+    const p = viaAlias(found);
     const st = statOf(p);
     if (!st) return;
     if (st.isDirectory()) { if (recursive) out.searches.push({ dir: p, program }); return; }
@@ -462,14 +504,18 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
 
   // Existing paths an interpreter or unknown program names: the writer is asked.
   // Only words that look like paths count, so "npm test" or "make docs" don't
-  // prompt just because a folder of that name exists.
-  function named(w, cwd, program) {
+  // prompt just because a folder of that name exists. `bare`: the word is known to
+  // be a name even without a / or an extension (after `--`, or for an archiver).
+  // `operand`: it comes after `--`, so a leading - is part of the name.
+  function named(w, cwd, program, { bare = false, operand = false } = {}) {
     if (w.dynamic || !w.text || DEVICE.test(w.text)) return;
     let text = w.text;
-    if (/^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
+    if (!operand && /^-/.test(text)) { const eq = text.indexOf('='); if (eq < 0) return; text = text.slice(eq + 1); }
+    if (/^file:\/\//i.test(text)) text = fileUrlPath(text); // curl file:///Users/me/notes/x.md
     if (/^\.\.?$/.test(text)) return; // a bare "." or ".." is the current folder: "git add .", "pip install ."
-    if (!/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
-    const p = resolvePath(w.glob ? globFolder(text) : text, cwd);
+    if (!bare && !/[\\/]/.test(text) && !/\.[A-Za-z0-9]{1,8}$/.test(text)) return;
+    const found = resolvePath(w.glob ? globFolder(text) : text, cwd);
+    const p = found === null ? null : viaAlias(found);
     if (p !== null && statOf(p)) out.named.push({ path: p, program });
   }
 
@@ -536,11 +582,18 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
     if (SHELLS[prog]) {
       const code = inlineShellCode(prog, args);
       const inner = SHELLS[prog];
-      if (code !== null) {
-        if (depth < MAX_DEPTH) run(code, inner, cwd, depth + 1); else out.unknown.push({ word: code, program: prog });
-        return undefined;
+      const runCode = (text) => { if (depth < MAX_DEPTH) run(text, inner, cwd, depth + 1); else out.unknown.push({ word: text, program: prog }); };
+      if (code !== null && code !== '-') { runCode(code); return undefined; }
+      for (const h of c.heredocs) runCode(h);
+      // With no -c and no script file (or with -s, or -Command -), a shell runs the
+      // code on its input: a here-string, or what the command before it prints.
+      if (code === '-' || readsCodeFromInput(prog, args)) {
+        for (const s of c.herestrings || []) { if (s.dynamic) out.unknown.push({ word: s.text || '(a variable)', program: prog }); else runCode(s.text); }
+        if (c.pipedFrom) {
+          const text = literalOutput(c.pipedFrom, dl);
+          if (text === null) out.unknown.push({ word: 'code from its input', program: prog }); else runCode(text);
+        }
       }
-      for (const h of c.heredocs) if (depth < MAX_DEPTH) run(h, inner, cwd, depth + 1);
       for (const w of args) named(w, cwd, prog);
       return undefined;
     }
@@ -565,12 +618,36 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       if (at >= 0) for (const r of fdRoots(args.slice(0, at))) readTarget(r, cwd, `${prog} -x`, true);
       return undefined;
     }
+    // Moving or linking gives a file a new name: reads through it later in the line
+    // are judged by the real file, and a move from outside the list into it asks.
+    if (!ps && (prog === 'mv' || prog === 'ln')) { moveOrLink(prog, args, cwd); return undefined; }
+    if (ps && (prog === 'move-item' || prog === 'mi' || prog === 'move')) {
+      const a = psArgs(args);
+      const sources = [...(a.named['-path'] || []), ...(a.named['-literalpath'] || [])];
+      const rest = [...a.positional];
+      if (!sources.length && rest.length) sources.push(rest.shift());
+      const dest = (a.named['-destination'] || [])[0] || rest[0];
+      if (dest) relocate('mv', sources, dest, cwd);
+      return undefined;
+    }
+    if (ps && (prog === 'new-item' || prog === 'ni')) {
+      const a = psArgs(args);
+      const type = (a.named['-itemtype'] || a.named['-type'] || [])[0];
+      const target = (a.named['-target'] || a.named['-value'] || [])[0];
+      const at = (a.named['-path'] || [])[0] || a.positional[0];
+      if (type && /^(symboliclink|junction|hardlink)$/i.test(type.text) && target && at && !target.dynamic && !at.dynamic) {
+        const atAbs = resolvePath(at.text, cwd);
+        const toAbs = resolvePath(target.text, cwd);
+        if (atAbs && toAbs) aliases.push({ at: atAbs, to: viaAlias(toAbs) });
+      }
+      return undefined;
+    }
     if (LISTERS.has(prog) || (QUIET.has(prog) && !(ps && PS_READERS.has(prog)))) return undefined;
 
-    if (prog === 'git' && QUIET_GIT.has(gitSubcommand(args))) return undefined;
+    if (prog === 'git') { gitCommand(args, cwd); return undefined; }
 
     const readers = ps ? PS_READERS : POSIX_READERS;
-    if (!readers.has(prog)) { for (const w of args) named(w, cwd, prog); return undefined; }
+    if (!readers.has(prog)) { otherProgram(prog, args, cwd); return undefined; }
 
     if (prog === 'dd') { for (const w of args) if (w.text.startsWith('if=')) readTarget({ ...w, text: w.text.slice(3) }, cwd, prog, false); return undefined; }
     if (ps && (prog === 'select-string' || prog === 'sls')) {
@@ -594,9 +671,14 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       const a = psArgs(args);
       const paths = [];
       for (const name of PS_PATH_PARAMS) paths.push(...(a.named[name] || []));
-      paths.push(...(['copy-item', 'copy', 'cp', 'cpi'].includes(prog) ? a.positional.slice(0, 1) : a.positional));
+      const copy = ['copy-item', 'copy', 'cp', 'cpi'].includes(prog);
+      paths.push(...(copy ? a.positional.slice(0, 1) : a.positional));
       if (!paths.length) pipedSearch(c, cwd, prog, true, dl);
-      for (const w of paths) readTarget(w, cwd, prog, false);
+      // Copy-Item -Recurse copies a whole folder, so it reads everything in it.
+      const recurse = copy && args.some((w) => !w.dynamic && w.text.length > 1 && '-recurse'.startsWith(w.text.toLowerCase()));
+      for (const w of paths) readTarget(w, cwd, prog, recurse);
+      const dest = copy ? ((a.named['-destination'] || [])[0] || a.positional[1]) : null;
+      if (dest) relocate('cp', paths, dest, cwd);
       return undefined;
     }
 
@@ -638,8 +720,165 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       }
     }
     if (prog === 'cp' && !has('-t', '--target-directory')) files = operands.slice(0, -1);
-    for (const w of files) readTarget(w, cwd, prog, false);
+    // cp -r / -a copies a whole folder, so it reads everything in it.
+    const copiesFolders = prog === 'cp' && ([...named_.keys()].some((f) => !f.startsWith('--') && /^-[a-zA-Z]*[rRa][a-zA-Z]*$/.test(f)) || has('--recursive', '--archive'));
+    for (const w of files) readTarget(w, cwd, prog, copiesFolders);
+    if (prog === 'cp') {
+      const into = [...(named_.get('-t') || []), ...(named_.get('--target-directory') || [])][0];
+      if (into) relocate('cp', files, into, cwd, { intoFolder: true });
+      else if (operands.length > 1) relocate('cp', files, operands[operands.length - 1], cwd);
+    }
     return undefined;
+  }
+
+  // mv, cp and ln: every operand but the last is a source (all of them with -t DIR;
+  // a lone `ln -s target` links into the current folder).
+  function moveOrLink(prog, args, cwd) {
+    const operands = [];
+    let targetDir = null;
+    let symbolic = false;
+    let afterDashes = false;
+    for (let k = 0; k < args.length; k++) {
+      const w = args[k];
+      if (!afterDashes && !w.dynamic && w.text === '--') { afterDashes = true; continue; }
+      if (!afterDashes && !w.dynamic && w.text.length > 1 && w.text.startsWith('-')) {
+        if (w.text === '-t' || w.text === '--target-directory') { targetDir = args[k + 1] || null; k++; continue; }
+        if (w.text.startsWith('--target-directory=')) { targetDir = { ...w, text: w.text.slice('--target-directory='.length) }; continue; }
+        if (w.text === '-S' || w.text === '--suffix') { k++; continue; }
+        if (prog === 'ln' && (w.text === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(w.text))) symbolic = true;
+        continue;
+      }
+      operands.push(w);
+    }
+    if (targetDir) { relocate(prog, operands, targetDir, cwd, { symbolic, intoFolder: true }); return; }
+    if (operands.length > 1) relocate(prog, operands.slice(0, -1), operands[operands.length - 1], cwd, { symbolic });
+    else if (prog === 'ln' && operands.length === 1) relocate(prog, operands, null, cwd, { symbolic, intoFolder: true });
+  }
+
+  // Records the new name each source gets (`dest` is a folder they go into, or the
+  // new name of a single source; null means the current folder). A symlink's
+  // relative target counts from the folder the link is made in. A move from outside
+  // the list into it is noted, since afterwards the file reads as part of the list.
+  function relocate(prog, sources, dest, cwd, { symbolic = false, intoFolder = false } = {}) {
+    const destAbs = dest === null ? cwd : dest.dynamic ? null : resolvePath(dest.text, cwd);
+    const st = destAbs ? statOf(viaAlias(destAbs)) : null;
+    const isFolder = intoFolder || sources.length > 1 || (dest !== null && /[\\/]$/.test(dest.text)) || !!(st && st.isDirectory());
+    const linkDir = destAbs ? (isFolder ? destAbs : path.dirname(destAbs)) : null;
+    for (const s of sources) {
+      if (s.dynamic) continue;
+      const fromAbs = symbolic && !path.isAbsolute(s.text) ? (linkDir ? path.resolve(linkDir, s.text) : null) : resolvePath(s.text, cwd);
+      if (!fromAbs) continue;
+      const from = viaAlias(fromAbs);
+      const to = destAbs ? (isFolder ? path.join(destAbs, path.basename(fromAbs)) : destAbs) : null;
+      if (to) aliases.push({ at: to, to: from });
+      if (prog === 'mv' && statOf(from)) out.moves.push({ from, to, program: prog });
+    }
+  }
+
+  // git: subcommands that print no file contents pass. `git grep` is a search of
+  // its paths, else of the folder it runs in (-C moves it). The rest ask when they
+  // name a file outside the list, as other programs do.
+  function gitCommand(args, cwd) {
+    let here = cwd;
+    let k = 0;
+    for (; k < args.length; k++) {
+      const w = args[k];
+      if (w.dynamic) { otherProgram('git', args, cwd); return; }   // can't tell which subcommand
+      if (w.text === '-C' && args[k + 1]) { here = args[k + 1].dynamic ? null : resolvePath(args[k + 1].text, here); k++; continue; }
+      if (GIT_OPTIONS_WITH_VALUE.has(w.text)) { k++; continue; }
+      if (w.text.startsWith('-')) continue;
+      break;
+    }
+    const sub = args[k] ? args[k].text : null;
+    if (!sub || QUIET_GIT.has(sub)) return;
+    if (here === null) { out.unknown.push({ word: 'a folder only known when it runs (-C)', program: `git ${sub}` }); return; }
+    // git matches wildcards in pathspecs itself, so a quoted "*.md" after `--` is one too.
+    let dashes = false;
+    const rest = args.slice(k + 1).map((w) => {
+      if (!dashes) { if (w.text === '--' && !w.dynamic) dashes = true; return w; }
+      return /[*?[]/.test(w.text) ? { ...w, glob: true } : w;
+    });
+    if (sub === 'grep') { gitGrep(rest, here); return; }
+    const plain = [];
+    let pathspecs = false;
+    for (const w of rest) {
+      if (!pathspecs && w.text === '--' && !w.dynamic) pathspecs = true;
+      const p = GIT_REV_PATH.has(sub) && !pathspecs && !w.dynamic ? revPath(w.text) : null;
+      if (p === null) plain.push(w); else revPathRead(p, here, `git ${sub}`);
+    }
+    otherProgram(`git ${sub}`, plain, here);
+  }
+
+  // <rev>:<path> prints that file as it was: a file outside the list is denied like
+  // cat; one that is gone from the folder now is judged by where it was; a folder
+  // only lists names. The path is from the top of the repository, unless it starts
+  // with ./ or ../ (then from the current folder), as git reads it.
+  function revPathRead(p, here, program) {
+    if (!p) return;                                   // HEAD: lists the top folder
+    const base = /^\.\.?([\\/]|$)/.test(p) ? here : gitTop(here);
+    const abs = resolvePath(p, base);
+    if (abs === null) { out.unknown.push({ word: p, program }); return; }
+    const st = statOf(abs);
+    if (st && st.isDirectory()) return;
+    if (st) out.reads.push({ path: abs, program });
+    else out.named.push({ path: abs, program });
+  }
+
+  // The top of the git repository holding `from` (the nearest folder with .git),
+  // else the project folder.
+  function gitTop(from) {
+    if (!from) return root;
+    for (let d = from; ; d = path.dirname(d)) {
+      if (statOf(path.join(d, '.git'))) return d;
+      if (path.dirname(d) === d) return root || from;
+    }
+  }
+
+  function gitGrep(args, here) {
+    let patternGiven = false;
+    const operands = [];
+    const roots = [];
+    let afterDashes = false;
+    for (let j = 0; j < args.length; j++) {
+      const w = args[j];
+      if (afterDashes) { roots.push(w); continue; }
+      if (w.text === '--' && !w.dynamic) { afterDashes = true; continue; }
+      if (!w.dynamic && w.text.length > 1 && w.text.startsWith('-')) {
+        if (w.text === '-e') { patternGiven = true; j++; continue; }
+        if (w.text === '-f') { patternGiven = true; if (args[j + 1]) readTarget(args[j + 1], here, 'git grep -f', false); j++; continue; }
+        if (GIT_GREP_VALUES.has(w.text)) j++;
+        continue;
+      }
+      operands.push(w);
+    }
+    // Before `--`, a word that names an existing path is a path; anything else is a
+    // revision (git grep x HEAD searches the files as they are at HEAD, from here down).
+    for (const w of patternGiven ? operands : operands.slice(1)) {
+      if (w.dynamic) { roots.push(w); continue; }
+      if (/[*?[]/.test(w.text)) { roots.push({ ...w, glob: true }); continue; }   // a wildcard is a pathspec, not a revision
+      const p = resolvePath(w.text, here);
+      if (p !== null && statOf(p)) roots.push(w);
+    }
+    if (!roots.length) roots.push({ text: '.', dynamic: false, glob: false });
+    for (const r of roots) {
+      if (!r.dynamic && r.text.startsWith(':')) { out.unknown.push({ word: r.text, program: 'git grep' }); continue; } // :/ and other pathspec magic
+      readTarget(r, here, 'git grep', true);
+    }
+  }
+
+  // A program Margin doesn't know: an existing path it names outside the list asks.
+  // After `--` every word is a name, and archivers take bare folder names, so those
+  // count even without a / or an extension: `git show HEAD -- notes`, `tar czf - notes`.
+  // Quoted strings inside an argument (SQL, a small script) are looked at too, as
+  // for an interpreter's one-liner: sqlite3 :memory: "select readfile('notes/x.md')".
+  function otherProgram(prog, args, cwd) {
+    const archiver = ARCHIVERS.has(prog);
+    let afterDashes = false;
+    for (const w of args) {
+      if (!afterDashes && w.text === '--' && !w.dynamic) { afterDashes = true; continue; }
+      named(w, cwd, prog, { bare: archiver || afterDashes, operand: afterDashes });
+      if (!w.dynamic && /['"]/.test(w.text)) scanCode(w.text, cwd, prog);
+    }
   }
 
   // xargs runs a command on names it reads from its input, or from the file -a names
@@ -690,7 +929,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
 // null to allow, or { decision: 'deny' | 'ask', reason }. Known reads outside the
 // list are denied with the same words as Read; uncertain cases ask the writer.
 export function decide(command, { dialect, cwd, scriptsDir, root, rules }) {
-  const found = classify(command, { dialect, cwd, scriptsDir });
+  const found = classify(command, { dialect, cwd, scriptsDir, root });
   const show = (p) => {
     const r = path.relative(root, p);
     return r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : p;
@@ -701,6 +940,11 @@ export function decide(command, { dialect, cwd, scriptsDir, root, rules }) {
   for (const n of once(found.named, 'path')) {
     if (rules.reasonFor(n.path)) {
       return { decision: 'ask', reason: `Margin focus is on, and this command (${n.program}) names ${show(n.path)}, which isn't in the focus list (${rules.list}). Allow it only if Claude reading that is fine.` };
+    }
+  }
+  for (const m of found.moves) {
+    if (rules.reasonFor(m.from) && (m.to === null || !rules.reasonFor(m.to))) {
+      return { decision: 'ask', reason: `Margin focus is on, and this command (${m.program}) moves ${show(m.from)}, which isn't in the focus list (${rules.list}), into ${m.to ? show(m.to) : 'a folder Margin can’t tell'}, where Claude could then read it. Allow it only if that's fine.` };
     }
   }
   for (const u of found.unknown) {
@@ -746,6 +990,51 @@ function inlineShellCode(prog, args) {
   }
   const at = args.findIndex((w) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w.text));
   return at >= 0 && args[at + 1] ? args[at + 1].text : null;
+}
+
+// Whether a shell started without -c runs the code on its input: bash and friends
+// do when given no script file, or -s; PowerShell and cmd when given no command or
+// file (inlineShellCode returns '-' for pwsh -Command -).
+const SHELL_OPTS_WITH_VALUE = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
+function readsCodeFromInput(prog, args) {
+  if (prog === 'cmd') return !args.some((w) => /^\/[ck]$/i.test(w.text));
+  if (prog === 'pwsh' || prog === 'powershell') return !args.some((w) => /^-(f|file|c|command|encodedcommand|e|ec)$/i.test(w.text)) && args.every((w) => w.text.startsWith('-'));
+  let operands = 0;
+  for (let k = 0; k < args.length; k++) {
+    const t = args[k].text;
+    if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(t)) return true;
+    if (SHELL_OPTS_WITH_VALUE.has(t)) { k++; continue; }
+    if (/^[-+]/.test(t)) continue;
+    operands++;
+  }
+  return operands === 0;
+}
+
+const unescapeEcho = (t) => t.replace(/\\(n|t|\\)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'));
+
+// What a command prints when it is all literal text: echo/printf/Write-Output with
+// fixed words, cat with a here-document, or a PowerShell string on its own. null
+// when it can't be known (a file, a variable, a download).
+function literalOutput(src, dl) {
+  const words = stripPrefix(src.words);
+  if (!words.length || words[0].dynamic) return null;
+  const rest = words.slice(1);
+  if (rest.some((w) => w.dynamic)) return null;
+  if (dl === 'powershell' && words.length === 1 && words[0].quoted && !src.callOp) return words[0].text;
+  const p = programName(words[0].text);
+  if (p === 'echo' || p === 'write-output' || p === 'write') {
+    let k = 0;
+    let escapes = false;
+    if (dl !== 'powershell') while (rest[k] && /^-[neE]+$/.test(rest[k].text)) { if (rest[k].text.includes('e')) escapes = true; k++; }
+    const text = rest.slice(k).map((w) => w.text).join(' ');
+    return escapes ? unescapeEcho(text) : text;
+  }
+  if (p === 'printf') return rest.length ? unescapeEcho(rest.map((w) => w.text).join(' ')) : null;
+  if (p === 'cat' && !rest.length) {
+    const parts = [...src.heredocs, ...(src.herestrings || []).map((w) => w.text)];
+    return parts.length ? parts.join('\n') : null;
+  }
+  return null;
 }
 
 // The commands inside $( ... ) and backticks in a stretch of text: bash expands them

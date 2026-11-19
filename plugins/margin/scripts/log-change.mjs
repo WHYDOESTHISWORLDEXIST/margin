@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  readStdinJson, projectDir, marginDir, isSetUp, readJson, isPlainObject, appendLine, rel, isInside,
+  readStdinJson, projectDir, toolCwd, marginDir, isSetUp, readJson, isPlainObject, appendLine, rel, isInside,
   logPath, withLock, nextChangeId, fingerprint, safeToolUseId, TIDY_EVERY
 } from './lib.mjs';
 
@@ -25,22 +25,24 @@ if (event === 'PostToolUseFailure' || event === 'PermissionDenied') {
 
 const args = input.tool_input || {};
 const file = args.file_path || args.notebook_path;
+// A relative path is relative to the folder the tool ran in, as guard.mjs reads it.
+const target = typeof file === 'string' && file ? path.resolve(toolCwd(input, root), file) : null;
 let id = null;
 
-if (file && !isInside(path.resolve(root, file), marginDir(root))) {
+if (target && !isInside(target, marginDir(root))) {
   const pendingFile = safeToolUseId(input.tool_use_id) ? path.join(marginDir(root), 'history', 'pending', `${input.tool_use_id}.json`) : null;
   const read = pendingFile ? readJson(pendingFile) : { state: 'missing' };
   const pending = read.state === 'ok' && isPlainObject(read.value) ? read.value : null;
   // A change in a set-up project is listed even if its backup failed.
   if (pending || isSetUp(root)) {
-    const after = fingerprint(path.resolve(root, file));
+    const after = fingerprint(target);
     withLock(root, 'log', () => {
       id = nextChangeId(root);
       appendLine(logPath(root), {
         id,
         time: new Date().toISOString(),
         tool: input.tool_name,
-        file: rel(root, file),
+        file: rel(root, target),
         created: pending ? !pending.existed : null,
         snapshot: pending ? pending.snapshot : null,
         after

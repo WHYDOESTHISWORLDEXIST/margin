@@ -8,7 +8,7 @@
 // or into .git, .margin or node_modules.
 import fs from 'node:fs';
 import path from 'node:path';
-import { projectDir, scriptArgs, marginDir, readJson, readJsonl, writeJsonlAtomic, damagedLinesNote, appendLine, rel, isInside, isPlainObject } from './lib.mjs';
+import { projectDir, scriptArgs, marginDir, readJson, readJsonl, writeJsonlAtomic, damagedLinesNote, appendLine, rel, isInside, isPlainObject, localTime } from './lib.mjs';
 
 const root = projectDir();
 const logFile = path.join(marginDir(root), 'moves.jsonl');
@@ -66,7 +66,7 @@ if (command === 'apply') {
     moved++;
     console.log(`moved ${step.from} -> ${step.to}`);
   });
-  console.log(`${moved} of ${plan.length} moved. Undo with: node move.mjs undo`);
+  console.log(`${moved} of ${plan.length} moved.${moved ? ' To put them back: /margin:organize undo' : ''}`);
 } else if (command === 'undo') {
   const log = readJsonl(logFile);
   const note = damagedLinesNote(log.bad, 'moves.jsonl');
@@ -86,8 +86,8 @@ if (command === 'apply') {
   const rest = log.lines.filter((l) => !lines.includes(l));
   if (failed.length) rest.push({ value: { time: last.value.time, batch: keyOf(last), moves: failed } });
   writeJsonlAtomic(logFile, rest);
-  console.log(`Put back ${steps.length - failed.length} of ${steps.length} files from ${last.value.time}.`);
-  if (failed.length) console.log(`${failed.length} ${failed.length === 1 ? "file couldn't" : "files couldn't"} go back yet; once that's sorted out, undo again puts ${failed.length === 1 ? 'it' : 'them'} back.`);
+  console.log(`Put back ${steps.length - failed.length} of ${steps.length} files moved at ${localTime(last.value.time)}.`);
+  if (failed.length) console.log(`${failed.length} ${failed.length === 1 ? "file couldn't" : "files couldn't"} go back yet; once that's sorted out, /margin:organize undo puts ${failed.length === 1 ? 'it' : 'them'} back.`);
   if (note) console.log(note);
 } else {
   console.log('Use "apply <plan.json>" or "undo".');

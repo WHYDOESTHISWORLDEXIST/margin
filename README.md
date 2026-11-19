@@ -77,9 +77,9 @@ You may want to add `.margin/` to your project's `.gitignore`.
 
 ### What focus covers
 
-The focus list covers Claude's Read and Grep tools and the shell commands that read or search files: Bash, and PowerShell on Windows. On Claude Code 2.1.314 or later, commands started with the Monitor tool are checked the same way, according to Claude Code's documentation (not yet confirmed in a live session here). A known reader or search outside the list (`cat`, `head`, `grep -r`, `Get-Content`, `Select-String` and the like) is blocked with the same message as a Read. Commands run through `eval` or PowerShell's `Invoke-Expression`, PowerShell .NET reads such as `[IO.File]::ReadAllText(...)`, and a `cd` inside a subshell are followed too. Anything Margin can't be sure about, such as a one-line script naming an outside file, a file name in a variable or an unknown program, asks you first. A search with no path, or a relative one, means Claude's current folder.
+The focus list covers Claude's Read and Grep tools and the shell commands that read or search files: Bash, and PowerShell on Windows. On Claude Code 2.1.314 or later, commands started with the Monitor tool are checked the same way, according to Claude Code's documentation (not yet confirmed in a live session here). A known reader or search outside the list (`cat`, `head`, `grep -r`, `Get-Content`, `Select-String` and the like) is blocked with the same message as a Read. Commands run through `eval` or PowerShell's `Invoke-Expression`, code fed to a shell on its input (`printf '...' | sh`, `bash <<< '...'`), PowerShell .NET reads such as `[IO.File]::ReadAllText(...)`, and a `cd` inside a subshell are followed too, and so are `~+` and `file://` paths. A link, move or copy made earlier in the same command is followed as well, so reading through the new name counts as reading the real file; moving a file from outside the list into it asks, since afterwards it would read as part of the list. Anything Margin can't be sure about, such as a one-line script or SQL naming an outside file, a file name in a variable, code piped in from a file or a download, or an unknown program naming an outside file or folder, asks you first. Folder names count without a `/` after `--` and for archivers like `tar` and `zip`. A search with no path, or a relative one, means Claude's current folder.
 
-Reads from device files such as `/dev/null` never count, and neither do git commands that don't print file contents (`add`, `commit`, `status`, `checkout`, `mv`, `rm`, `push`, `pull` and so on). `git diff`, `show`, `log`, `grep` and `blame` still ask when they name a file outside the list.
+Reads from device files such as `/dev/null` never count, and neither do git commands that don't print file contents (`add`, `commit`, `status`, `checkout`, `mv`, `rm`, `push`, `pull` and so on). `git grep` is a search, like `grep -r`; `git show HEAD:notes/x.md` (and `cat-file`, `diff` with that `<rev>:<path>` form) reads that file; `git diff`, `show`, `log` and `blame` ask when they name a file or folder outside the list.
 
 It also covers Margin's own backups in `.margin/history` and `.margin/trash`, since they hold copies of your files. Margin's settings and lists in `.margin/` stay readable, and so do Claude Code's own session files (its scratchpad and saved tool output).
 
@@ -116,7 +116,9 @@ test/fixtures/                     sample citation files for the tests
 node test/run-tests.mjs
 ```
 
-The tests run each hook command from `hooks.json` through `sh -c`, in a copy of the plugin and a project whose paths contain spaces, so they need a Bash-compatible `sh` on the PATH (Git Bash on Windows).
+The tests run each hook command from `hooks.json` through `sh -c`, in a copy of the plugin and a project whose paths contain spaces. That needs a Bash-compatible `sh` on the PATH (Git Bash on Windows); without one, those three tests are skipped with a message.
+
+Claude Code updates an installed plugin only when the `version` in `plugins/margin/.claude-plugin/plugin.json` changes, so raise it with every change people should receive. Otherwise `claude plugin update` reports the plugin as already up to date and keeps the old code.
 
 To load the plugin from this folder without installing it, start Claude Code with:
 

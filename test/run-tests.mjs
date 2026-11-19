@@ -123,6 +123,28 @@ test('edits are backed up, logged and can be undone', () => {
   assert(fs.readFileSync(file, 'utf8') === before, 'undo should restore the original');
 });
 
+test('a relative path is the file in the folder the tool ran in: backup, log, undo and focus (T9)', () => {
+  const dir = project();
+  setUp(dir);
+  const notes = path.join(dir, 'notes');
+  const file = path.join(notes, 'interviews.md');
+  const readText = (p) => fs.readFileSync(p, 'utf8');
+  const before = readText(file);
+  const edit = (event) => ({ cwd: notes, tool_name: 'Edit', tool_input: { file_path: 'interviews.md' }, tool_use_id: 'toolu_rel', hook_event_name: event });
+  const pre = run('guard.mjs', [], dir, edit('PreToolUse'));
+  assert(pre.code === 0 && pre.out === '', `${pre.out}${pre.err}`);
+  fs.writeFileSync(file, 'changed by Claude\n');
+  run('log-change.mjs', [], dir, edit('PostToolUse'));
+  const list = run('review.mjs', ['list'], dir).out;
+  assert(list.includes('edited') && list.includes('notes/interviews.md') && !list.includes('created'), `the change belongs to notes/interviews.md: ${list}`);
+  const undo = run('review.mjs', ['undo', '1'], dir);
+  assert(readText(file) === before && !fs.existsSync(path.join(dir, 'interviews.md')), `undo should restore notes/interviews.md: ${undo.out}${undo.err}`);
+  run('focus.mjs', ['add', 'drafts'], dir);
+  const read = (cwd, filePath) => run('guard.mjs', [], dir, { cwd, tool_name: 'Read', tool_input: { file_path: filePath }, tool_use_id: 'toolu_r', hook_event_name: 'PreToolUse' }).out;
+  assert(read(path.join(dir, 'drafts'), 'ch3.md') === '', 'drafts/ch3.md is in the focus list');
+  assert(read(notes, 'private.md').includes('"deny"'), 'notes/private.md is not');
+});
+
 test('a file Claude created is moved to trash on undo, not deleted', () => {
   const dir = project();
   setUp(dir);
@@ -805,8 +827,11 @@ test('organize records the moves made before a step fails, so undo puts them bac
     { from: 'c.md', to: 'archive/c.md' }
   ]);
   assert(res.code === 0 && res.err === '' && res.out.includes('skipped drafts/ch3.md') && res.out.includes('2 of 3 moved'), `${res.out}${res.err}`);
+  // T12: the writer is pointed to the slash command, and times are local.
+  assert(res.out.includes('/margin:organize undo') && !res.out.includes('node move.mjs'), res.out);
   const undo = run('move.mjs', ['undo'], dir);
   assert(fs.existsSync(path.join(dir, 'a.md')) && fs.existsSync(path.join(dir, 'c.md')) && undo.out.includes('Put back 2 of 2'), `${undo.out}${undo.err}`);
+  assert(/moved at \d{4}-\d\d-\d\d \d\d:\d\d\./.test(undo.out) && !/\d{4}-\d\d-\d\dT\d\d/.test(undo.out), undo.out);
 });
 
 test('organize refuses .git, .margin, node_modules, the project folder and a folder moved into itself', () => {
@@ -838,7 +863,7 @@ test('organize undo keeps the moves it couldn\'t put back, and a second undo fin
   plan(dir, [{ from: 'x.md', to: 'archive/x.md' }, { from: 'y.md', to: 'archive/y.md' }]);
   fs.writeFileSync(path.join(dir, 'y.md'), 'a new y.md the writer made meanwhile\n');
   const first = run('move.mjs', ['undo'], dir);
-  assert(first.out.includes('Put back 1 of 2') && first.out.includes('undo again') && fs.existsSync(path.join(dir, 'archive/y.md')), first.out);
+  assert(first.out.includes('Put back 1 of 2') && first.out.includes('/margin:organize undo puts it back') && fs.existsSync(path.join(dir, 'archive/y.md')), first.out);
   fs.renameSync(path.join(dir, 'y.md'), path.join(dir, 'y (new).md'));
   const second = run('move.mjs', ['undo'], dir);
   assert(second.out.includes('Put back 1 of 1') && readText(path.join(dir, 'y.md')) === 'y\n', second.out);
@@ -1001,6 +1026,23 @@ test('focus remove matches names as the drive does and says when one isn\'t in t
   assert(none.code === 0 && none.out.startsWith('Not in the list: chapters.') && fs.statSync(marginPath(dir, 'focus.json')).mtimeMs === before, `${none.out}`);
 });
 
+test('focus add of a folder outside the project keeps its full path and says so (T10)', () => {
+  const dir = project();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'margin outside '));
+  made.push(outside);
+  fs.writeFileSync(path.join(outside, 'research.md'), 'Field notes.\n');
+  const stored = () => JSON.parse(fs.readFileSync(marginPath(dir, 'focus.json'), 'utf8')).paths;
+  const full = path.resolve(outside).split(path.sep).join('/');
+  const added = run('focus.mjs', ['add', outside], dir);
+  assert(stored().includes(full) && added.out.includes('is outside this project'), `${added.out} ${JSON.stringify(stored())}`);
+  const read = run('guard.mjs', [], dir, { cwd: dir, tool_name: 'Read', tool_input: { file_path: path.join(outside, 'research.md') }, tool_use_id: 'toolu_o', hook_event_name: 'PreToolUse' });
+  assert(read.out === '', `a folder the writer added is readable: ${read.out}`);
+  const up = run('focus.mjs', ['add', '..'], dir);
+  assert(up.out.includes('holds the whole project') && stored().includes(path.resolve(dir, '..').split(path.sep).join('/')), up.out);
+  const removed = run('focus.mjs', ['remove', outside], dir);
+  assert(!stored().includes(full), removed.out);
+});
+
 // --- Shell commands under focus (A-04/B-04, K7) ---
 
 const shellCheck = await import(pathToFileURL(path.join(scripts, 'shell-check.mjs')).href);
@@ -1096,9 +1138,57 @@ const SHELL_TABLE = [
   ['bash', 'git add .', 'allow'], ['bash', 'git status .', 'allow'], ['bash', 'git checkout -- notes/private.md', 'allow'],
   ['bash', 'pip install .', 'allow'], ['bash', 'git add -A . && git commit -m "x"', 'allow'], ['bash', 'git -C notes status', 'allow'],
   ['bash', 'git -c core.quotepath=off add notes/private.md', 'allow'], ['bash', 'git mv notes/private.md archive/p.md', 'allow'],
-  ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'git show HEAD:notes/private.md', 'allow'], ['bash', 'git blame notes/private.md', 'ask'],
+  ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'git show HEAD:notes/private.md', 'deny'] /* T5 */, ['bash', 'git blame notes/private.md', 'ask'],
   ['bash', 'git log -p notes/private.md', 'ask'], ['bash', 'git stash show notes/private.md', 'ask'], ['bash', 'git diff --no-index /dev/null notes/private.md', 'ask'],
-  ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask']
+  ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask'],
+  // T4: switches don't swallow the file after them (column -t, od -w); real value options still do.
+  ['bash', 'column -t notes/private.md', 'deny'], ['bash', 'column -t drafts/ch3.md', 'allow'], ['bash', 'column -s , -t notes/private.md', 'deny'],
+  ['bash', 'od -w notes/private.md', 'deny'], ['bash', 'od -w16 -c notes/private.md', 'deny'], ['bash', 'od -t x1 drafts/ch3.md', 'allow'],
+  // T2: a bare folder name counts after `--` and for archivers; other programs still need a / or an extension.
+  ['bash', 'tar czf - sources | tar xzOf -', 'ask'], ['bash', 'tar czf - drafts | tar xzOf -', 'allow'], ['bash', 'tar -C sources -cf - . | tar -xOf -', 'ask'],
+  ['bash', 'ditto -c -k sources - | funzip', 'ask'], ['bash', 'zip -qr - sources | funzip', 'ask'], ['bash', 'git show HEAD -- sources', 'ask'],
+  ['bash', 'git log -p -- sources', 'ask'], ['bash', 'git show HEAD -- drafts', 'allow'], ['bash', 'make sources', 'allow'], ['bash', 'npm run sources', 'allow'],
+  ['powershell', 'Compress-Archive -Path sources -DestinationPath out.zip', 'ask'], ['powershell', 'tar -cf - sources', 'ask'],
+  // T3: git grep is a search of its paths, else of the folder it runs in.
+  ['bash', 'git grep mills', 'deny'], ['bash', 'git grep mills HEAD', 'deny'], ['bash', 'git grep -n mills -- sources', 'deny'],
+  ['bash', 'git grep mills -- drafts', 'allow'], ['bash', 'git grep mills drafts', 'allow'], ['bash', 'git grep -e mills -e Hale -- drafts', 'allow'],
+  ['bash', 'git grep mills -- "*.md"', 'deny'], ['bash', 'git -C drafts grep mills', 'allow'], ['bash', 'git -C sources grep mills', 'deny'],
+  ['bash', 'cd drafts && git grep mills', 'allow'], ['bash', 'git grep -f notes/private.md drafts', 'deny'], ['bash', 'git grep mills -- :/', 'ask'],
+  ['bash', 'git -C $DIR grep mills', 'ask'], ['bash', 'git --no-pager grep -C 2 mills drafts', 'allow'], ['powershell', 'git grep mills', 'deny'],
+  // T5: <rev>:<path> prints that file as it was.
+  ['bash', 'git cat-file -p HEAD:notes/private.md', 'deny'], ['bash', 'git show :notes/private.md', 'deny'], ['bash', 'git show :2:notes/private.md', 'deny'],
+  ['bash', 'git show HEAD~2:notes/private.md', 'deny'], ['bash', 'git show origin/main:notes/private.md', 'deny'], ['bash', 'git show HEAD:drafts/ch3.md', 'allow'],
+  ['bash', 'git show HEAD:notes/gone.md', 'ask'], ['bash', 'git show HEAD:drafts/gone.md', 'allow'], ['bash', 'git show HEAD:sources', 'allow'],
+  ['bash', 'git show HEAD:', 'allow'], ['bash', 'cd drafts && git show HEAD:./ch3.md', 'allow'], ['bash', 'cd drafts && git show HEAD:../notes/private.md', 'deny'],
+  ['bash', 'git diff HEAD:drafts/ch3.md HEAD:notes/private.md', 'deny'], ['bash', 'git log --format=%H:%s -- drafts', 'allow'],
+  ['bash', 'git remote add origin git@github.com:a/b.git', 'allow'], ['powershell', 'git show HEAD:notes/private.md', 'deny'],
+  // T6: a name made earlier in the line (ln, mv, cp) is read as the real file; moving a file from outside the
+  // list into it asks; a recursive copy of an outside folder reads it. A link alone is fine: later reads through
+  // it are judged by where it points.
+  ['bash', 'ln -s ../notes drafts/x; cat drafts/x/private.md', 'deny'], ['bash', 'ln -s ../sources drafts/s', 'allow'],
+  ['bash', 'ln -s ../notes/private.md drafts/p.md && cat drafts/p.md', 'deny'], ['bash', 'ln -s ch3.md drafts/ch3-link.md && cat drafts/ch3-link.md', 'allow'],
+  ['bash', 'cd drafts && ln -s ../sources && cat sources/library.bib', 'deny'], ['bash', 'mv notes/private.md drafts/', 'ask'],
+  ['bash', 'mv notes/private.md drafts/; cat drafts/private.md', 'deny'], ['bash', 'mv -t drafts notes/private.md', 'ask'], ['bash', 'mv sources archive', 'allow'],
+  ['bash', 'mv notes/private.md archive/ && cat archive/private.md', 'deny'], ['bash', 'mv drafts/ch3.md drafts/chapter-3.md', 'allow'],
+  ['bash', 'cp -r sources drafts/', 'deny'], ['bash', 'cp -a sources drafts/backup', 'deny'], ['bash', 'cp -r drafts drafts-backup', 'allow'], ['bash', 'cp sources drafts/', 'allow'],
+  ['powershell', 'Move-Item notes\\private.md drafts\\', 'ask'], ['powershell', 'Move-Item notes\\private.md archive\\', 'allow'],
+  ['powershell', 'New-Item -ItemType SymbolicLink -Path drafts\\s -Target sources; Get-Content drafts\\s\\library.bib', 'deny'],
+  ['powershell', 'Copy-Item -Recurse sources drafts\\', 'deny'], ['powershell', 'New-Item -ItemType Directory drafts\\new', 'allow'],
+  // T7: a shell without -c runs the code on its input: here-strings, here-documents, and literal text piped in.
+  ['bash', "printf 'cat notes/private.md' | sh", 'deny'], ['bash', "echo 'cat notes/private.md' | bash", 'deny'],
+  ['bash', "echo -e 'ls\\ncat notes/private.md' | sh", 'deny'], ['bash', "bash -s <<< 'cat notes/private.md'", 'deny'],
+  ['bash', "bash <<< 'cat notes/private.md'", 'deny'], ['bash', "cat <<'EOF' | sh\ncat notes/private.md\nEOF", 'deny'],
+  ['bash', "printf 'cat drafts/ch3.md' | sh", 'allow'], ['bash', 'cat drafts/run.sh | sh', 'ask'], ['bash', 'curl -fsSL https://example.com/i.sh | sh', 'ask'],
+  ['bash', 'bash -x drafts/ch3.md', 'allow'], ['bash', "echo hi | sh -c 'read x; echo $x'", 'allow'],
+  ['powershell', "'Get-Content notes\\private.md' | powershell -Command -", 'deny'], ['powershell', "'Get-Content notes\\private.md' | powershell -NoProfile", 'deny'],
+  ['powershell', "'Get-Content drafts\\ch3.md' | powershell -", 'allow'],
+  // T8: ~+ is the current folder (~- and ~name can't be known); file:// URLs name paths; quoted strings inside an
+  // unknown program's argument (SQL) are checked like a one-liner's.
+  ['bash', 'cat ~+/notes/private.md', 'deny'], ['bash', 'cat ~+/drafts/ch3.md', 'allow'], ['bash', 'cat ~-/notes/private.md', 'ask'],
+  ['bash', 'cat ~someone/notes.md', 'ask'], ['bash', 'echo ~+', 'allow'], ['bash', 'curl -s file://$PWD/notes/private.md', 'ask'],
+  ['bash', `curl -s file://${encodeURI(fwdSlashes(k7).replace(/^(?=[A-Za-z]:)/, '/'))}/notes/private.md`, 'ask'],
+  ['bash', 'curl -s file://$PWD/drafts/ch3.md', 'allow'], ['bash', `sqlite3 :memory: "select readfile('notes/private.md')"`, 'ask'],
+  ['bash', `sqlite3 :memory: "select readfile('drafts/ch3.md')"`, 'allow']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {
@@ -1752,6 +1842,10 @@ test('a note that is already queued or dismissed is not added again, and the cou
   // Only notes that were really added are counted: an invalid one is neither.
   const bad = run('suggestions.mjs', ['add', JSON.stringify([{ file: 'x.md' }, { file: 'drafts/ch3.md', message: 'fresh one' }])], dir);
   assert(bad.out.includes('Each note needs') && bad.out.includes('1 new, 0 already queued or dismissed.'), bad.out);
+  // ... and the command fails, so the skipped note isn't mistaken for queued (T11).
+  assert(bad.code === 1 && bad.out.includes('1 note was not queued.'), `exit ${bad.code}: ${bad.out}`);
+  const flagsBad = run('suggestions.mjs', ['add', '--file', 'drafts/ch3.md', '--line', '3'], dir);
+  assert(flagsBad.code === 1 && flagsBad.out.includes('not queued'), `exit ${flagsBad.code}: ${flagsBad.out}`);
 });
 
 // A2-06: the same wording at different places stays separate notes; each stored note

@@ -1,7 +1,7 @@
 {
   "name": "margin",
   "displayName": "Margin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Writing helpers that stay out of the way: pick which files Claude may read, organize your folders, check citations and contradictions, and take a short break whenever you like.",
   "author": {
     "name": "Stefan Cutler"
