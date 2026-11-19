@@ -1096,7 +1096,7 @@ const SHELL_TABLE = [
   ['bash', 'git add .', 'allow'], ['bash', 'git status .', 'allow'], ['bash', 'git checkout -- notes/private.md', 'allow'],
   ['bash', 'pip install .', 'allow'], ['bash', 'git add -A . && git commit -m "x"', 'allow'], ['bash', 'git -C notes status', 'allow'],
   ['bash', 'git -c core.quotepath=off add notes/private.md', 'allow'], ['bash', 'git mv notes/private.md archive/p.md', 'allow'],
-  ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'git show HEAD:notes/private.md', 'allow'], ['bash', 'git blame notes/private.md', 'ask'],
+  ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'git show HEAD:notes/private.md', 'deny'] /* T5 */, ['bash', 'git blame notes/private.md', 'ask'],
   ['bash', 'git log -p notes/private.md', 'ask'], ['bash', 'git stash show notes/private.md', 'ask'], ['bash', 'git diff --no-index /dev/null notes/private.md', 'ask'],
   ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask'],
   // T4: switches don't swallow the file after them (column -t, od -w); real value options still do.
@@ -1112,7 +1112,14 @@ const SHELL_TABLE = [
   ['bash', 'git grep mills -- drafts', 'allow'], ['bash', 'git grep mills drafts', 'allow'], ['bash', 'git grep -e mills -e Hale -- drafts', 'allow'],
   ['bash', 'git grep mills -- "*.md"', 'deny'], ['bash', 'git -C drafts grep mills', 'allow'], ['bash', 'git -C sources grep mills', 'deny'],
   ['bash', 'cd drafts && git grep mills', 'allow'], ['bash', 'git grep -f notes/private.md drafts', 'deny'], ['bash', 'git grep mills -- :/', 'ask'],
-  ['bash', 'git -C $DIR grep mills', 'ask'], ['bash', 'git --no-pager grep -C 2 mills drafts', 'allow'], ['powershell', 'git grep mills', 'deny']
+  ['bash', 'git -C $DIR grep mills', 'ask'], ['bash', 'git --no-pager grep -C 2 mills drafts', 'allow'], ['powershell', 'git grep mills', 'deny'],
+  // T5: <rev>:<path> prints that file as it was.
+  ['bash', 'git cat-file -p HEAD:notes/private.md', 'deny'], ['bash', 'git show :notes/private.md', 'deny'], ['bash', 'git show :2:notes/private.md', 'deny'],
+  ['bash', 'git show HEAD~2:notes/private.md', 'deny'], ['bash', 'git show origin/main:notes/private.md', 'deny'], ['bash', 'git show HEAD:drafts/ch3.md', 'allow'],
+  ['bash', 'git show HEAD:notes/gone.md', 'ask'], ['bash', 'git show HEAD:drafts/gone.md', 'allow'], ['bash', 'git show HEAD:sources', 'allow'],
+  ['bash', 'git show HEAD:', 'allow'], ['bash', 'cd drafts && git show HEAD:./ch3.md', 'allow'], ['bash', 'cd drafts && git show HEAD:../notes/private.md', 'deny'],
+  ['bash', 'git diff HEAD:drafts/ch3.md HEAD:notes/private.md', 'deny'], ['bash', 'git log --format=%H:%s -- drafts', 'allow'],
+  ['bash', 'git remote add origin git@github.com:a/b.git', 'allow'], ['powershell', 'git show HEAD:notes/private.md', 'deny']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

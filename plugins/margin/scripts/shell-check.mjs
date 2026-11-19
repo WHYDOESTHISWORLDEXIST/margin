@@ -76,6 +76,18 @@ const QUIET_GIT = new Set(['add', 'rm', 'mv', 'commit', 'restore', 'checkout', '
 const GIT_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
 // git grep options whose value is the next word (-f, the pattern file, is read).
 const GIT_GREP_VALUES = new Set(['-A', '-B', '-C', '-m', '--max-count', '--max-depth', '--threads', '--context', '--after-context', '--before-context']);
+// git subcommands that print a file given as <rev>:<path> (git show HEAD:notes/x.md).
+const GIT_REV_PATH = new Set(['show', 'cat-file', 'diff']);
+
+// The path in git's <rev>:<path> form ("HEAD:notes/x.md", ":notes/x.md" for the
+// staged copy, ":2:x.md"); null for anything else, including C:\ paths, URLs and
+// user@host:path remotes.
+function revPath(text) {
+  if (!text || text.startsWith('-') || /^[A-Za-z]:[\\/]/.test(text) || /^[A-Za-z][\w+.-]*:\/\//.test(text)) return null;
+  const m = /^(:[0-3]:|[^:]*:)([\s\S]*)$/.exec(text);
+  if (!m || /^[\w.-]+@[\w.-]+:$/.test(m[1])) return null;
+  return m[2];
+}
 
 const CD = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
 const PUSH = new Set(['pushd', 'push-location']);
@@ -393,7 +405,7 @@ function globFolder(text) {
   return fixed.length ? fixed.join('/') || '/' : '.';
 }
 
-export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = null } = {}) {
+export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = null, root = null } = {}) {
   const out = { reads: [], searches: [], named: [], unknown: [] };
   const scriptsReal = scriptsDir ? safeReal(scriptsDir) : null;
   run(command, dialect, cwd, 0);
@@ -665,7 +677,39 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
       return /[*?[]/.test(w.text) ? { ...w, glob: true } : w;
     });
     if (sub === 'grep') { gitGrep(rest, here); return; }
-    otherProgram(`git ${sub}`, rest, here);
+    const plain = [];
+    let pathspecs = false;
+    for (const w of rest) {
+      if (!pathspecs && w.text === '--' && !w.dynamic) pathspecs = true;
+      const p = GIT_REV_PATH.has(sub) && !pathspecs && !w.dynamic ? revPath(w.text) : null;
+      if (p === null) plain.push(w); else revPathRead(p, here, `git ${sub}`);
+    }
+    otherProgram(`git ${sub}`, plain, here);
+  }
+
+  // <rev>:<path> prints that file as it was: a file outside the list is denied like
+  // cat; one that is gone from the folder now is judged by where it was; a folder
+  // only lists names. The path is from the top of the repository, unless it starts
+  // with ./ or ../ (then from the current folder), as git reads it.
+  function revPathRead(p, here, program) {
+    if (!p) return;                                   // HEAD: lists the top folder
+    const base = /^\.\.?([\\/]|$)/.test(p) ? here : gitTop(here);
+    const abs = resolvePath(p, base);
+    if (abs === null) { out.unknown.push({ word: p, program }); return; }
+    const st = statOf(abs);
+    if (st && st.isDirectory()) return;
+    if (st) out.reads.push({ path: abs, program });
+    else out.named.push({ path: abs, program });
+  }
+
+  // The top of the git repository holding `from` (the nearest folder with .git),
+  // else the project folder.
+  function gitTop(from) {
+    if (!from) return root;
+    for (let d = from; ; d = path.dirname(d)) {
+      if (statOf(path.join(d, '.git'))) return d;
+      if (path.dirname(d) === d) return root || from;
+    }
   }
 
   function gitGrep(args, here) {
@@ -760,7 +804,7 @@ export function classify(command, { dialect = 'bash', cwd = null, scriptsDir = n
 // null to allow, or { decision: 'deny' | 'ask', reason }. Known reads outside the
 // list are denied with the same words as Read; uncertain cases ask the writer.
 export function decide(command, { dialect, cwd, scriptsDir, root, rules }) {
-  const found = classify(command, { dialect, cwd, scriptsDir });
+  const found = classify(command, { dialect, cwd, scriptsDir, root });
   const show = (p) => {
     const r = path.relative(root, p);
     return r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : p;
