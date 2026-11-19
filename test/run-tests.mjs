@@ -1098,7 +1098,10 @@ const SHELL_TABLE = [
   ['bash', 'git -c core.quotepath=off add notes/private.md', 'allow'], ['bash', 'git mv notes/private.md archive/p.md', 'allow'],
   ['bash', 'git diff notes/private.md', 'ask'], ['bash', 'git show HEAD:notes/private.md', 'allow'], ['bash', 'git blame notes/private.md', 'ask'],
   ['bash', 'git log -p notes/private.md', 'ask'], ['bash', 'git stash show notes/private.md', 'ask'], ['bash', 'git diff --no-index /dev/null notes/private.md', 'ask'],
-  ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask']
+  ['bash', 'git $SUB notes/private.md', 'ask'], ['powershell', 'git add .', 'allow'], ['powershell', 'git diff notes\\private.md', 'ask'],
+  // T4: switches don't swallow the file after them (column -t, od -w); real value options still do.
+  ['bash', 'column -t notes/private.md', 'deny'], ['bash', 'column -t drafts/ch3.md', 'allow'], ['bash', 'column -s , -t notes/private.md', 'deny'],
+  ['bash', 'od -w notes/private.md', 'deny'], ['bash', 'od -w16 -c notes/private.md', 'deny'], ['bash', 'od -t x1 drafts/ch3.md', 'allow']
 ];
 
 test('focus on: shell commands are allowed, denied or asked about as the table says', () => {

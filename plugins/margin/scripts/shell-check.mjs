@@ -97,18 +97,21 @@ const INLINE_CODE = {
   python: ['-c'], python3: ['-c'], python2: ['-c'], py: ['-c'], pypy: ['-c'], pypy3: ['-c'],
   ruby: ['-e'], perl: ['-e', '-E'], php: ['-r'], rscript: ['-e'], lua: ['-e'], osascript: ['-e'], julia: ['-e']
 };
-// Options whose value is the next word (so it isn't taken for a file).
+// Options whose value is the next word (so it isn't taken for a file). Only real
+// value options belong here: a switch listed by mistake would swallow the file name
+// after it (column -t, od -w), and that file would never be checked.
 const OPT_VALUES = {
   head: ['-n', '-c'], tail: ['-n', '-c'], sort: ['-k', '-t', '-T', '-S', '--key', '--field-separator'], cut: ['-d', '-f', '-c', '-b'],
   grep: ['-e', '-f', '-m', '-A', '-B', '-C', '-d', '-D', '--regexp', '--file', '--max-count', '--context'],
   rg: ['-e', '-f', '-g', '-m', '-A', '-B', '-C', '-t', '-T', '-j', '-M', '--glob', '--type', '--type-not', '--max-count', '--regexp', '--file', '--threads', '--sort', '--sortr'],
   ag: ['-G', '-m', '-A', '-B', '-C', '--ignore', '--file-search-regex'], ack: ['--type', '-m'], ugrep: ['-e', '-f', '-m', '-A', '-B', '-C', '-g', '-t'],
   sed: ['-e', '-f', '-l', '--expression', '--file'], awk: ['-f', '-v', '-F', '--file', '--assign', '--field-separator'],
-  diff: ['-U', '-C', '-x', '-X', '--exclude'], od: ['-t', '-N', '-j', '-A', '-w'], xxd: ['-l', '-s', '-c', '-g', '-o'],
+  diff: ['-U', '-C', '-x', '-X', '--exclude'], od: ['-t', '-N', '-j', '-A'] /* -w takes its value attached (-w16) */, xxd: ['-l', '-s', '-c', '-g', '-o'],
   hexdump: ['-n', '-s', '-e', '-f'], jq: ['--indent', '-f', '--from-file'], paste: ['-d'], base64: ['-w'], iconv: ['-f', '-t'],
   fold: ['-w'], fmt: ['-w'], join: ['-1', '-2', '-t', '-o'], split: ['-l', '-b', '-n'], nl: ['-b', '-w', '-s', '-v', '-i'],
   bat: ['-l', '-r', '-H', '--language', '--line-range', '--highlight-line', '--theme', '--style'], cmp: ['-n', '-i'],
-  column: ['-s', '-t'], strings: ['-n', '-t'], less: ['-p', '-x'], tac: ['-s'], cp: ['-t', '-S', '--target-directory', '--suffix']
+  // column: -t (table) is a switch; these take a value (util-linux and BSD).
+  column: ['-s', '-c', '-o', '-n', '-N', '-E', '-H', '-i', '-l', '-O', '-p', '-r', '-R', '-T', '-W'], strings: ['-n', '-t'], less: ['-p', '-x'], tac: ['-s'], cp: ['-t', '-S', '--target-directory', '--suffix']
 };
 for (const alias of ['egrep', 'fgrep', 'zgrep']) OPT_VALUES[alias] = OPT_VALUES.grep;
 for (const alias of ['gawk', 'mawk', 'nawk']) OPT_VALUES[alias] = OPT_VALUES.awk;
